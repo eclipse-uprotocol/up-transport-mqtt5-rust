@@ -10,3 +10,33 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
+
+use up_rust::{transport::datamodel::UTransport, uprotocol::{UMessage, UStatus, UUri}};
+
+pub struct MqttTransport {}
+
+impl UTransport for MqttTransport {
+    fn send(&self, message: UMessage) -> Result<(), UStatus> {
+        // implementation goes here
+        Ok(())
+    }
+
+    fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
+        // implementation goes here
+        Ok(UMessage::new())
+    }
+
+    fn register_listener(
+        &self,
+        topic: UUri,
+        listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
+    ) -> Result<String, UStatus> {
+        // implementation goes here
+        Ok("".to_string())
+    }
+
+    fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
+        // implementation goes here
+        Ok(())
+    }
+}
