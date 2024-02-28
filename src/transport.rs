@@ -30,13 +30,6 @@ impl UTransport for MqttTransport {
         Ok(())
     }
 
-    async fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
-        // implementation goes here
-        println!("Receiving message from topic: {:?}", topic);
-
-        Ok(UMessage::new())
-    }
-
     async fn register_listener(
         &self,
         topic: UUri,
@@ -57,5 +50,12 @@ impl UTransport for MqttTransport {
         println!("Unregistering listener: {listener} for topic: {:?}", topic);
 
         Ok(())
+    }
+
+    async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+        Err(UStatus::fail_with_code(
+            up_rust::uprotocol::UCode::UNIMPLEMENTED,
+            "This method is not implemented for mqtt. Use register_listener instead.",
+        ))
     }
 }
