@@ -23,7 +23,7 @@ exclude = [
     ".github/*",
     ".gitignore",
 ]
-keywords = ["uProtocol", "SDK"]
+keywords = ["uProtocol", "SDK", "MQTT, "MQTT5"]
 license = "Apache-2.0"
 name = "up-client-mqtt5-rust"
 readme = "README.md"
@@ -34,11 +34,7 @@ version = "0.1.0"
 [dependencies]
 async-trait = { version = "0.1" }
 bytes = { version = "1.5" }
-chrono = { version = "0.4" }
-cloudevents-sdk = { version = "0.7" }
-mediatype = "0.19"
 paho-mqtt = { version = "0.12.1" }
-protobuf = { version = "3.3" }
 rand = { version = "0.8" }
 regex = { version = "1.10" }
 serde = { version = "1.0", features = ["derive"] }
@@ -46,11 +42,6 @@ serde_json = { version = "1.0" }
 up-rust = { git = "https://github.com/eclipse-uprotocol/up-rust", version = "0.1.5" }
 url = { version = "2.5" }
 uuid = { version = "1.7", features = ["v8"] }
-
-[build-dependencies]
-protobuf-codegen = { version = "3.3" }
-protoc-bin-vendored = { version = "3.0" }
-ureq = { version = "2.9.1", features = ["proxy-from-env"] }
 
 [dev-dependencies]
 test-case = { version = "3.3" }
