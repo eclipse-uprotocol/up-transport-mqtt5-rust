@@ -13,7 +13,11 @@
 
 use async_trait::async_trait;
 
-use up_rust::{transport::datamodel::UTransport, uprotocol::{UMessage, UStatus, UUri}};
+use up_rust::{
+    transport::datamodel::UTransport,
+    uprotocol::{UMessage, UStatus, UUri},
+    uuid::builder::UUIDBuilder,
+};
 
 pub struct MqttTransport {}
 
@@ -21,11 +25,15 @@ pub struct MqttTransport {}
 impl UTransport for MqttTransport {
     async fn send(&self, message: UMessage) -> Result<(), UStatus> {
         // implementation goes here
+        println!("Sending message: {:?}", message);
+
         Ok(())
     }
 
     async fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
         // implementation goes here
+        println!("Receiving message from topic: {:?}", topic);
+
         Ok(UMessage::new())
     }
 
@@ -35,11 +43,19 @@ impl UTransport for MqttTransport {
         listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
     ) -> Result<String, UStatus> {
         // implementation goes here
-        Ok("".to_string())
+        println!("Registering listener for topic: {:?}", topic);
+
+        listener(Ok(UMessage::new()));
+
+        let listener_id = UUIDBuilder::new().build().to_string();
+
+        Ok(listener_id)
     }
 
     async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
         // implementation goes here
+        println!("Unregistering listener: {listener} for topic: {:?}", topic);
+
         Ok(())
     }
 }
