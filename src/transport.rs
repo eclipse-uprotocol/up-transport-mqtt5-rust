@@ -19,10 +19,10 @@ use up_rust::{
     uuid::builder::UUIDBuilder,
 };
 
-pub struct MqttTransport {}
+use crate::UPClientMqtt;
 
 #[async_trait]
-impl UTransport for MqttTransport {
+impl UTransport for UPClientMqtt {
     async fn send(&self, message: UMessage) -> Result<(), UStatus> {
         // implementation goes here
         println!("Sending message: {:?}", message);
