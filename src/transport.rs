@@ -11,22 +11,25 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+use async_trait::async_trait;
+
 use up_rust::{transport::datamodel::UTransport, uprotocol::{UMessage, UStatus, UUri}};
 
 pub struct MqttTransport {}
 
+#[async_trait]
 impl UTransport for MqttTransport {
-    fn send(&self, message: UMessage) -> Result<(), UStatus> {
+    async fn send(&self, message: UMessage) -> Result<(), UStatus> {
         // implementation goes here
         Ok(())
     }
 
-    fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
+    async fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
         // implementation goes here
         Ok(UMessage::new())
     }
 
-    fn register_listener(
+    async fn register_listener(
         &self,
         topic: UUri,
         listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
@@ -35,7 +38,7 @@ impl UTransport for MqttTransport {
         Ok("".to_string())
     }
 
-    fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
+    async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
         // implementation goes here
         Ok(())
     }
