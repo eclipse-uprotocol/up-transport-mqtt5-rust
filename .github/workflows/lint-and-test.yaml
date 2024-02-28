@@ -38,8 +38,6 @@ jobs:
         run: |
           rustup show
           rustup component add rustfmt clippy
-#      - name: Cache Dependencies
-#        uses: Swatinem/rust-cache@v2
       - name: cargo fmt
         working-directory: ${{github.workspace}}
         run: cargo fmt -- --check
