@@ -17,9 +17,52 @@ To run the tests from the repo root directory, run
 cargo test
 ```
 
-### Running the Examples
+### Running the Local Examples
 
 First, ensure you have a local MQTT broker running, such as [Mosquitto](https://github.com/eclipse/mosquitto).
+
+Make sure to set all of the required parameters in the .cargo/config.toml:
+```toml
+KEY_STORE = "not needed"
+PRIVATE_KEY_PW = "not needed"
+MQTT_HOSTNAME = "localhost for the default mosquitto setup"
+MQTT_PORT = "1883 for the default mosquitto setup"
+CLIENT_NAME = "not needed"
+```
+
+Then start the following two examples from your repo root directory.
+
+```bash
+cargo run --example publisher_example
+```
+
+```bash
+cargo run --example subscriber_example
+```
+
+### Running the Examples for Azure
+
+First create the eventgrid:
+1. create the eventgrid
+2. create a namespace
+3. create a topic space with template: d/VehicleA/# for uprotocol topics //VehicleA/*
+4. create client
+
+Give the client a certificate:
+1. create a ssl certificate
+2. add the thumbprint to the client
+
+Give the client access to topics
+1. give publish and subscribe rights to the topics
+
+Make sure to set all of the required parameters in the .cargo/config.toml:
+```toml
+KEY_STORE = "the .pem file location corresponding to the eventgrid clients ssl certificate"
+PRIVATE_KEY_PW = "the password to the .pem file"
+MQTT_HOSTNAME = "the hostname/ url of the eventgrid"
+MQTT_PORT = "8883 for ssl encrypted mqtt"
+CLIENT_NAME = "the name of the eventgrid client"
+```
 
 Then start the following two examples from your repo root directory.
 

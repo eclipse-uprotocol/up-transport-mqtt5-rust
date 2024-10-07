@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::{
+ use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
     str::FromStr,
@@ -22,8 +22,8 @@ use async_channel::Receiver;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::StreamExt;
-use log::{info, trace, warn};
-use paho_mqtt::{self as mqtt, AsyncReceiver, Message, MQTT_VERSION_5, QOS_1};
+use log::{debug, info, trace, warn};
+use paho_mqtt::{self as mqtt, AsyncReceiver, Message, MQTT_VERSION_5, QOS_0, QOS_1};
 use protobuf::MessageDyn;
 use tokio::{sync::RwLock, task::JoinHandle};
 use up_rust::{
@@ -103,15 +103,9 @@ impl MockableMqttClient for AsyncMqttClient {
     where
         Self: Sized,
     {
-        let mqtt_protocol = if config.ssl_options.is_some() {
-            "mqtts"
-        } else {
-            "mqtt"
-        };
-
         let mqtt_uri = format!(
             "{}://{}:{}",
-            mqtt_protocol, config.mqtt_hostname, config.mqtt_port
+            config.mqtt_protocol, config.mqtt_hostname, config.mqtt_port
         );
 
         let mut mqtt_cli = mqtt::CreateOptionsBuilder::new()
@@ -129,9 +123,12 @@ impl MockableMqttClient for AsyncMqttClient {
         let message_stream = mqtt_cli.get_stream(100);
 
         // TODO: Integrate ssl options when connecting, may need a username, etc.
-        let conn_opts = mqtt::ConnectOptionsBuilder::with_mqtt_version(MQTT_VERSION_5)
+        let conn_opts = 
+            mqtt::ConnectOptionsBuilder::with_mqtt_version(MQTT_VERSION_5)
             .clean_start(false)
             .properties(mqtt::properties![mqtt::PropertyCode::SessionExpiryInterval => config.session_expiry_interval])
+            .ssl_options(config.ssl_options)
+            .user_name(config.username)
             .finalize();
 
         mqtt_cli.connect(conn_opts).await.map_err(|e| {
@@ -174,7 +171,7 @@ impl MockableMqttClient for AsyncMqttClient {
     async fn subscribe(&self, topic: &str, id: i32) -> Result<(), UStatus> {
         // QOS 1 - Delivered and received at least once
         self.inner_mqtt_client
-            .subscribe_with_options(topic, QOS_1, None, sub_id(id))
+            .subscribe_with_options(topic, QOS_1, None, None) // todo: 4th argument depends on mqtt version!
             .await
             .map_err(|e| {
                 UStatus::fail_with_code(
@@ -207,6 +204,8 @@ impl MockableMqttClient for AsyncMqttClient {
 
 /// Configuration for the mqtt client.
 pub struct MqttConfig {
+    /// Schema of the mqtt broker (mqtt or mqtts)
+    pub mqtt_protocol: String,
     /// Port of the mqtt broker to connect to.
     pub mqtt_port: String,
     /// Hostname of the mqtt broker.
@@ -218,7 +217,9 @@ pub struct MqttConfig {
     /// Session Expiry Interval for the mqtt client.
     pub session_expiry_interval: i32,
     /// Optional SSL options for the mqtt connection.
-    pub ssl_options: Option<mqtt::SslOptions>,
+    pub ssl_options: mqtt::SslOptions,
+    /// Username
+    pub username: String,
 }
 
 /// UP Client for mqtt.
