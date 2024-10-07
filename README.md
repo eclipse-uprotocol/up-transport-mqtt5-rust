@@ -19,9 +19,22 @@ cargo test
 
 ### Running the Examples
 
-First, ensure you have a local MQTT broker running, such as [Mosquitto](https://github.com/eclipse/mosquitto).
+1. Start an MQTT broker (e.g. mosquitto)
 
-Then start the following two examples from your repo root directory.
+2. Set up your environment (for example with a config file at .cargo/config.toml)
+
+Make sure to set these parameters:
+```toml
+[env]
+MQTT_PROTOCOL = "'mqtt' or 'mqtts'"
+MQTT_PORT = "8883 for ssl encrypted mqtt"
+MQTT_HOSTNAME = "the hostname/ url of the broker"
+KEY_STORE = "the .pem file location corresponding to an ssl certificate (if using mqtts)"
+PRIVATE_KEY_PW = "the password to the .pem file (if using mqtts)"
+CLIENT_NAME = "the name of the eventgrid client (if using mqtts)"
+```
+
+3. Start the following two examples from your repo root directory.
 
 ```bash
 cargo run --example publisher_example

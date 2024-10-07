@@ -37,7 +37,7 @@ impl UTransport for UPClientMqtt {
         let topic = self.to_mqtt_topic_string(src_uri, sink_uri);
 
         // Extract payload from umessage to send
-        let payload = message.payload.clone();
+        let payload = message.payload;
 
         self.send_message(&topic, attributes, payload).await
     }
@@ -62,17 +62,6 @@ impl UTransport for UPClientMqtt {
         let topic: String = self.to_mqtt_topic_string(source_filter, sink_filter);
 
         self.remove_listener(&topic, listener).await
-    }
-
-    async fn receive(
-        &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
-    ) -> Result<UMessage, UStatus> {
-        Err(UStatus::fail_with_code(
-            UCode::UNIMPLEMENTED,
-            "This method is not implemented for mqtt. Use register_listener instead.",
-        ))
     }
 }
 

@@ -12,11 +12,15 @@
  ********************************************************************************/
 
 use std::{
+    env,
     str::{self, FromStr},
     sync::Arc,
 };
 
 use async_trait::async_trait;
+use env_logger::{Builder, Target};
+use log::LevelFilter;
+use paho_mqtt::SslOptionsBuilder;
 use up_client_mqtt5_rust::{MqttConfig, UPClientMqtt, UPClientMqttType};
 use up_rust::{UListener, UMessage, UStatus, UTransport, UUri, UUID};
 
@@ -37,19 +41,57 @@ impl UListener for PrintlnListener {
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
+    Builder::new()
+        .target(Target::Stdout) // Logs to stdout
+        .filter(None, LevelFilter::Trace) // Default level
+        .init();
+
+    // Get the protocol type from the environment (either "mqtt" or "mqtts" for unencrypted/ encrypted mqtt)
+    let protocol = env::var("MQTT_PROTOCOL")
+        .expect("MQTT_PROTOCOL env variable not found")
+        .to_string();
+    let mut ssl_options = None;
+    let mut user_name = "eclipse_testuser".to_string();
+
+    // Check if "mqtts" is selected and set the optional parameters
+    if protocol == "mqtts".to_string() {
+        // Build the ssl options
+        ssl_options = Some(
+            SslOptionsBuilder::new()
+                .key_store(env::var("KEY_STORE").expect("KEY_STORE env variable not found"))
+                .expect("Certificate file not found.")
+                .private_key_password(
+                    env::var("PRIVATE_KEY_PW").expect("PRIVATE_KEY_PW env variable not found"),
+                )
+                .enable_server_cert_auth(false)
+                .finalize(),
+        );
+        // Set the username to the name attached to the certificate
+        user_name = env::var("CLIENT_NAME")
+            .expect("CLIENT_NAME env variable not found")
+            .to_string();
+    }
+
+    // Build the configuration for the connection
     let config = MqttConfig {
-        mqtt_hostname: "localhost".to_string(),
-        mqtt_port: "1883".to_string(),
+        mqtt_protocol: protocol,
+        mqtt_hostname: env::var("MQTT_HOSTNAME")
+            .expect("MQTT_HOSTNAME env variable not found")
+            .to_string(),
+        mqtt_port: env::var("MQTT_PORT")
+            .expect("MQTT_PORT env variable not found")
+            .to_string(),
         max_buffered_messages: 100,
         max_subscriptions: 100,
         session_expiry_interval: 3600,
-        ssl_options: None,
+        ssl_options: ssl_options,
+        username: user_name,
     };
 
     let client = UPClientMqtt::new(
         config,
         UUID::build(),
-        "Vehicle_A".to_string(),
+        "Vehicle_B".to_string(),
         UPClientMqttType::Device,
     )
     .await?;
