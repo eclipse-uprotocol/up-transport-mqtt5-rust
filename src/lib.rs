@@ -83,22 +83,21 @@ pub struct AsyncMqttClient {
     sub_identifier_available: bool,
 }
 
-impl AsyncMqttClient {
-    fn check_subscription_identifier_available_in_response(props: &Properties) -> bool{
-        let subscription_identifier_available_code = paho_mqtt::PropertyCode::SubscriptionIdentifiersAvailable;
-        let property = props.get(subscription_identifier_available_code);
-        if let Some(property) = property {
-            let property_value = property.get_byte();
-            if let Some(value) = property_value {
-                if value != 1 {
-                    debug!("Subscription Identifier not supported by broker");
-                    return false;
-                }
+
+fn check_subscription_identifier_available_in_response(props: &Properties) -> bool{
+    let subscription_identifier_available_code = paho_mqtt::PropertyCode::SubscriptionIdentifiersAvailable;
+    let property = props.get(subscription_identifier_available_code);
+    if let Some(property) = property {
+        let property_value = property.get_byte();
+        if let Some(value) = property_value {
+            if value != 1 {
+                debug!("Subscription Identifier not supported by broker");
+                return false;
             }
         }
-        debug!("Subscription Identifier supported by broker");
-        true
     }
+    debug!("Subscription Identifier supported by broker");
+    true
 }
 
 // Create a set of poperties with a single Subscription ID
@@ -156,7 +155,7 @@ impl MockableMqttClient for AsyncMqttClient {
             )
         })?;
 
-        let sub_identifier_available = AsyncMqttClient::check_subscription_identifier_available_in_response(token.properties());
+        let sub_identifier_available = check_subscription_identifier_available_in_response(token.properties());
 
         Ok((
             Self {
