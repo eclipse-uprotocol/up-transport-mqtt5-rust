@@ -11,12 +11,14 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::{
-    str::{self, FromStr},
-    sync::Arc,
+ use std::{
+    env, str::{self, FromStr}, sync::Arc
 };
 
 use async_trait::async_trait;
+use env_logger::{Builder, Target};
+use log::LevelFilter;
+use paho_mqtt::SslOptionsBuilder;
 use up_client_mqtt5_rust::{MqttConfig, UPClientMqtt, UPClientMqttType};
 use up_rust::{UListener, UMessage, UStatus, UTransport, UUri, UUID};
 
@@ -37,28 +39,39 @@ impl UListener for PrintlnListener {
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
+    Builder::new()
+    .target(Target::Stdout) // Logs to stdout
+    .filter(None, LevelFilter::Trace) // Default level
+    .init();
+
+    let ssl_options = SslOptionsBuilder::new()
+    .key_store(env::var("KEY_STORE").expect("KEY_STORE env variable not found")).expect("Could not find certificate file.")
+    .private_key_password(env::var("PRIVATE_KEY_PW").expect("PRIVATE_KEY_PW env variable not found"))
+    .enable_server_cert_auth(false)
+    .finalize();
+
     let config = MqttConfig {
-        mqtt_hostname: "localhost".to_string(),
-        mqtt_port: "1883".to_string(),
+        mqtt_protocol: env::var("MQTT_PROTOCOL").expect("MQTT_PROTOCOL env variable not found").to_string(),
+        mqtt_hostname: env::var("MQTT_HOSTNAME").expect("MQTT_HOSTNAME env variable not found").to_string(),
+        mqtt_port: env::var("MQTT_PORT").expect("MQTT_PORT env variable not found").to_string(),
         max_buffered_messages: 100,
         max_subscriptions: 100,
         session_expiry_interval: 3600,
-        ssl_options: None,
+        ssl_options: Some(ssl_options),
+        username: env::var("CLIENT_NAME").expect("CLIENT_NAME env variable not found").to_string(),
     };
 
     let client = UPClientMqtt::new(
         config,
         UUID::build(),
-        "Vehicle_A".to_string(),
+        "Vehicle_B".to_string(),
         UPClientMqttType::Device,
     )
     .await?;
 
     let listener = Arc::new(PrintlnListener {});
-    let source_filter = UUri::from_str(&format!(
-        "//Vehicle_B/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"
-    ))
-    .expect("Failed to create source filter");
+    let source_filter =
+        UUri::from_str("//Vehicle_B/A8000/2/8A50").expect("Failed to create source filter");
 
     println!("Subscribing to: {}", source_filter.to_uri(false));
 
