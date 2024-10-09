@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
- use std::{
+use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
     str::FromStr,
