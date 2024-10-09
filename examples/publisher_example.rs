@@ -39,7 +39,7 @@ async fn main() -> Result<(), UStatus> {
         max_buffered_messages: 100,
         max_subscriptions: 100,
         session_expiry_interval: 3600,
-        ssl_options,
+        ssl_options: Some(ssl_options),
         username: env::var("CLIENT_NAME").expect("CLIENT_NAME env variable not found").to_string(),
     };
 

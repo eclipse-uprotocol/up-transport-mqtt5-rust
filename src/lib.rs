@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::StreamExt;
 use log::{debug, info, trace, warn};
-use paho_mqtt::{self as mqtt, AsyncReceiver, Message, Properties, MQTT_VERSION_5, QOS_0, QOS_1};
+use paho_mqtt::{self as mqtt, AsyncReceiver, Message, Properties, SslOptions, MQTT_VERSION_5, QOS_0, QOS_1};
 use protobuf::MessageDyn;
 use tokio::{sync::RwLock, task::JoinHandle};
 use up_rust::{
@@ -145,7 +145,7 @@ impl MockableMqttClient for AsyncMqttClient {
             mqtt::ConnectOptionsBuilder::with_mqtt_version(MQTT_VERSION_5)
             .clean_start(false)
             .properties(mqtt::properties![mqtt::PropertyCode::SessionExpiryInterval => config.session_expiry_interval])
-            .ssl_options(config.ssl_options)
+            .ssl_options(config.ssl_options.or_else(|| Some(SslOptions::default())).unwrap())
             .user_name(config.username)
             .finalize();
 
@@ -245,7 +245,7 @@ pub struct MqttConfig {
     /// Session Expiry Interval for the mqtt client.
     pub session_expiry_interval: i32,
     /// Optional SSL options for the mqtt connection.
-    pub ssl_options: mqtt::SslOptions,
+    pub ssl_options: Option<mqtt::SslOptions>,
     /// Username
     pub username: String,
 }
