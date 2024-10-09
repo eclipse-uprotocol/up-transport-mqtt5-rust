@@ -51,7 +51,7 @@ async fn main() -> Result<(), UStatus> {
     .finalize();
 
     let config = MqttConfig {
-        mqtt_protocol: "mqtts".to_string(),
+        mqtt_protocol: env::var("MQTT_PROTOCOL").expect("MQTT_PROTOCOL env variable not found").to_string(),
         mqtt_hostname: env::var("MQTT_HOSTNAME").expect("MQTT_HOSTNAME env variable not found").to_string(),
         mqtt_port: env::var("MQTT_PORT").expect("MQTT_PORT env variable not found").to_string(),
         max_buffered_messages: 100,
