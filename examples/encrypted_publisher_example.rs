@@ -11,10 +11,11 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::{str::FromStr, time::SystemTime};
+use std::{env, str::FromStr, time::SystemTime};
 
 use env_logger::{Builder, Target};
 use log::LevelFilter;
+use paho_mqtt::SslOptionsBuilder;
 use up_client_mqtt5_rust::{MqttConfig, MqttProtocol, UPClientMqtt, UPClientMqttType};
 use up_rust::{UMessageBuilder, UPayloadFormat, UStatus, UTransport, UUri, UUID};
 
@@ -25,17 +26,31 @@ async fn main() -> Result<(), UStatus> {
         .filter(None, LevelFilter::Trace) // Default level
         .init();
 
-    // Set the protocol type ("mqtt" for unencrypted mqtt)
-    let protocol = MqttProtocol::Mqtt;
+    // Set the protocol type (Mqtts for encrypted mqtt)
+    let protocol = MqttProtocol::Mqtts;
 
-    // no need to build ssl options since we are using unencrypted mqtt, username is arbitrary
-    let ssl_options = None;
-    let user_name = "eclipse_testuser".to_string();
+    // Build the ssl options (only needed if protocol is Mqtts!)
+    let ssl_options = Some(
+        SslOptionsBuilder::new()
+            .key_store(env::var("KEY_STORE").expect("KEY_STORE env variable not found"))
+            .expect("Certificate file not found.")
+            .private_key_password(
+                env::var("PRIVATE_KEY_PW").expect("PRIVATE_KEY_PW env variable not found"),
+            )
+            .enable_server_cert_auth(false)
+            .finalize(),
+    );
+    // If the mqtt broker has a specific username attached to the ssl certificate, it must be included in the config
+    let user_name = env::var("CLIENT_NAME")
+        .expect("CLIENT_NAME env variable not found")
+        .to_string();
 
     let config = MqttConfig {
         mqtt_protocol: protocol,
-        mqtt_hostname: "localhost".to_string(),
-        mqtt_port: 1883,
+        mqtt_hostname: env::var("MQTT_HOSTNAME")
+            .expect("MQTT_HOSTNAME env variable not found")
+            .to_string(),
+        mqtt_port: 8883,
         max_buffered_messages: 100,
         max_subscriptions: 100,
         session_expiry_interval: 3600,

@@ -123,9 +123,16 @@ impl MockableMqttClient for AsyncMqttClient {
     where
         Self: Sized,
     {
+        let mqtt_protocol = match config.mqtt_protocol {
+            MqttProtocol::Mqtt => "mqtt",
+            MqttProtocol::Mqtts => "mqtts",
+        };
+
         let mqtt_uri = format!(
             "{}://{}:{}",
-            config.mqtt_protocol, config.mqtt_hostname, config.mqtt_port
+            mqtt_protocol,
+            config.mqtt_hostname,
+            config.mqtt_port
         );
 
         let mut mqtt_cli = mqtt::CreateOptionsBuilder::new()
@@ -238,9 +245,9 @@ impl MockableMqttClient for AsyncMqttClient {
 /// Configuration for the mqtt client.
 pub struct MqttConfig {
     /// Schema of the mqtt broker (mqtt or mqtts)
-    pub mqtt_protocol: String,
+    pub mqtt_protocol: MqttProtocol,
     /// Port of the mqtt broker to connect to.
-    pub mqtt_port: String,
+    pub mqtt_port: u16,
     /// Hostname of the mqtt broker.
     pub mqtt_hostname: String,
     /// Max buffered messages for the mqtt client.
@@ -277,6 +284,12 @@ pub struct UPClientMqtt {
 pub enum UPClientMqttType {
     Device,
     Cloud,
+}
+
+/// Type of MQTT protocol
+pub enum MqttProtocol {
+    Mqtt,
+    Mqtts,
 }
 
 impl UPClientMqtt {
