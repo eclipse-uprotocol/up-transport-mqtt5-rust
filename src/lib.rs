@@ -130,9 +130,7 @@ impl MockableMqttClient for AsyncMqttClient {
 
         let mqtt_uri = format!(
             "{}://{}:{}",
-            mqtt_protocol,
-            config.mqtt_hostname,
-            config.mqtt_port
+            mqtt_protocol, config.mqtt_hostname, config.mqtt_port
         );
 
         let mut mqtt_cli = mqtt::CreateOptionsBuilder::new()
