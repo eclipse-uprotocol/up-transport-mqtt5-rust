@@ -39,7 +39,7 @@ async fn main() -> Result<(), UStatus> {
         max_buffered_messages: 100,
         max_subscriptions: 100,
         session_expiry_interval: 3600,
-        ssl_options: ssl_options,
+        ssl_options,
         username: user_name,
     };
 
