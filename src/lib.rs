@@ -86,9 +86,7 @@ pub struct AsyncMqttClient {
 }
 
 fn check_subscription_identifier_available_in_response(props: &Properties) -> bool {
-    let subscription_identifier_available_code =
-        paho_mqtt::PropertyCode::SubscriptionIdentifiersAvailable;
-    let property = props.get(subscription_identifier_available_code);
+    let property = props.get(paho_mqtt::PropertyCode::SubscriptionIdentifiersAvailable);
     if let Some(property) = property {
         let property_value = property.get_byte();
         if let Some(value) = property_value {
@@ -198,15 +196,15 @@ impl MockableMqttClient for AsyncMqttClient {
     /// * `topic` - Topic to subscribe to.
     async fn subscribe(&self, topic: &str, id: i32) -> Result<(), UStatus> {
         // QOS 1 - Delivered and received at least once
-        let use_sub_id = self.sub_identifier_available;
-        let mut sub_id_prop = None;
-        if use_sub_id {
+        let sub_id_prop = if self.sub_identifier_available {
             debug!(
                 "Subcription identifier supported by broker. Subscribe with subscription id {}",
                 id
             );
-            sub_id_prop = Some(sub_id(id));
-        }
+            Some(sub_id(id))
+        } else {
+            None
+        };
 
         self.inner_mqtt_client
             .subscribe_with_options(topic, QOS_1, None, sub_id_prop)
