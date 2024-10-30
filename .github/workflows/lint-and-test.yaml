@@ -20,6 +20,7 @@ on:
     paths:
       - "src/**"
       - "Cargo.*"
+      - "tests/**"
   workflow_call: {}
   workflow_dispatch: {}
 
