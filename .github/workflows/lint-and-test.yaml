@@ -61,6 +61,8 @@ jobs:
       - name: Install dependencies
         run: |
           cargo install cargo-tarpaulin
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake
       - name: Show toolchain information
         working-directory: ${{github.workspace}}
         run: |
@@ -68,7 +70,7 @@ jobs:
           cargo --version
       - name: Wait for MQTT broker to be available
         run: |
-          until nc -z localhost 1883; do
+          until curl -s "localhost:1883" >/dev/null; do
             echo "Waiting for MQTT broker..."
             sleep 1
           done
