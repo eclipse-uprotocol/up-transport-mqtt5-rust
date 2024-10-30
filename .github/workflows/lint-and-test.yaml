@@ -21,7 +21,7 @@ on:
       - "src/**"
       - "Cargo.*"
   workflow_call: {}
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 concurrency:
       group: ${{ github.ref }}-${{ github.workflow }}
