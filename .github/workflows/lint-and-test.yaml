@@ -20,7 +20,7 @@ on:
     paths:
       - "src/**"
       - "Cargo.*"
-  workflow_call:
+  workflow_call: {}
   workflow_dispatch:
 
 concurrency:
