@@ -1,7 +1,0 @@
-#!/bin/bash
-
-cd tests/mosquitto
-docker compose up
-
-cd ..
-cargo test

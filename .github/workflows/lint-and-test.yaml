@@ -50,14 +50,6 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
 
-    services:
-      mosquitto:
-        image: eclipse-mosquitto:2.0
-        volumes:
-          - mosquitto.conf:/mosquitto/config/mosquitto.conf
-        ports:
-          - 1883:1883
-
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -65,15 +57,19 @@ jobs:
         run: |
           cargo install cargo-tarpaulin
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y netcat-openbsd cmake
       - name: Show toolchain information
         working-directory: ${{github.workspace}}
         run: |
           rustup toolchain list
           cargo --version
+      - name: Start Mosquitto
+        run: |
+          cd ./tests/mosquitto
+          docker compose up -d
       - name: Wait for MQTT broker to be available
         run: |
-          until curl -s "localhost:1883" >/dev/null; do
+          until nc -z localhost 1883; do
             echo "Waiting for MQTT broker..."
             sleep 1
           done
