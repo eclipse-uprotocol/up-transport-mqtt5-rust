@@ -19,7 +19,11 @@ cargo test
 
 ### Running the Examples
 
-1. Start an MQTT broker (e.g. mosquitto)
+1. Start an MQTT broker or use the included Mosquitto broker:
+```bash
+cd tests/mosquitto
+docker compose up
+```
 
 2. Set up your environment (for example with a config file at .cargo/config.toml)
 

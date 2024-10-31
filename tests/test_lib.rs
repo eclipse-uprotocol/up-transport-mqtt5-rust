@@ -5,7 +5,7 @@ use up_client_mqtt5_rust::{MqttConfig, MqttProtocol, UPClientMqtt, UPClientMqttT
 use up_rust::{UListener, UMessage, UStatus, UUID};
 
 pub struct TestListener {
-    pub recv_data: Arc<Mutex<String>>
+    pub recv_data: Arc<Mutex<String>>,
 }
 
 impl TestListener {
@@ -24,7 +24,6 @@ impl UListener for TestListener {
 }
 
 pub async fn create_up_transport_mqtt(authority_name: &str) -> Result<UPClientMqtt, UStatus> {
-
     let config = MqttConfig {
         mqtt_protocol: MqttProtocol::Mqtt,
         mqtt_hostname: "localhost".to_string(),
@@ -41,30 +40,8 @@ pub async fn create_up_transport_mqtt(authority_name: &str) -> Result<UPClientMq
         UUID::build(),
         authority_name.to_string(),
         UPClientMqttType::Device,
-    ).await?;
-
-    Ok(client)
-}
-
-pub async fn create_up_transport_mqtts(authority_name: &str) -> Result<UPClientMqtt, UStatus> {
-
-    let config = MqttConfig {
-        mqtt_protocol: MqttProtocol::Mqtt,
-        mqtt_hostname: "localhost".to_string(),
-        mqtt_port: 8883,
-        max_buffered_messages: 100,
-        max_subscriptions: 100,
-        session_expiry_interval: 3600,
-        ssl_options: None,
-        username: "testuser".to_string(),
-    };
-
-    let client = UPClientMqtt::new(
-        config,
-        UUID::build(),
-        authority_name.to_string(),
-        UPClientMqttType::Device,
-    ).await?;
+    )
+    .await?;
 
     Ok(client)
 }
