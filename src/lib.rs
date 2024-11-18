@@ -352,6 +352,7 @@ impl UPClientMqtt {
         tokio::spawn(async move {
             while let Some(msg_opt) = message_stream.next().await {
                 let Some(msg) = msg_opt else {
+                    //TODO: None means that the connection is dropped. This should be handled correctly.
                     trace!("Received empty message from stream.");
                     continue;
                 };
@@ -371,13 +372,10 @@ impl UPClientMqtt {
                     }
                 };
 
-                let payload = msg.payload();
-                let upayload = payload.to_vec();
-
                 // Create UMessage from UAttributes and UPayload.
                 let umessage = UMessage {
                     attributes: Some(uattributes).into(),
-                    payload: Some(upayload.into()),
+                    payload: Some(Bytes::copy_from_slice(msg.payload())),
                     ..Default::default()
                 };
 
@@ -398,20 +396,33 @@ impl UPClientMqtt {
                         trace!("No listeners registered for topic: {}", sub_topic);
                         continue;
                     };
+                    let owned_listeners = listeners.clone();
 
-                    for listener in listeners.iter() {
-                        listener.on_receive(umessage.clone()).await;
+                    // Release the locks early, before message dispatch
+                    drop(topic_map_read);
+                    drop(subscription_map_read);
+
+                    for listener in owned_listeners {
+                        let msg = umessage.clone();
+                        tokio::spawn(async move {
+                            listener.on_receive(msg.clone()).await;
+                        });
                     }
                 } else {
                     // Filter the topic map for topics that match the received topic, including wildcards.
-                    let topics_iter = topic_map_read
+                    let listeners: Vec<ComparableListener> = topic_map_read
                         .iter()
-                        .filter(|(key, _)| UPClientMqtt::compare_topic(topic, key));
+                        .filter(|(key, _)| UPClientMqtt::compare_topic(topic, key))
+                        .flat_map(|(_topic, listener)| listener.to_owned())
+                        .collect();
+                    // Drop lock before message dispatch
+                    drop(topic_map_read);
 
-                    for (_topic, listeners) in topics_iter {
-                        for listener in listeners.iter() {
-                            listener.on_receive(umessage.clone()).await;
-                        }
+                    for listener in listeners {
+                        let msg = umessage.clone();
+                        tokio::spawn(async move {
+                            listener.on_receive(msg.clone()).await;
+                        });
                     }
                 }
             }
