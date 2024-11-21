@@ -361,25 +361,30 @@ impl UPClientMqtt {
                     .get_int(mqtt::PropertyCode::SubscriptionIdentifier);
 
                 // Get attributes from mqtt header.
-                let uattributes = {
-                    match UPClientMqtt::get_uattributes_from_mqtt_properties(msg.properties()) {
-                        Ok(uattributes) => uattributes,
-                        Err(e) => {
-                            warn!("Unable to get UAttributes from mqtt properties: {}", e);
-                            continue;
+                let umessage = if msg.properties().is_empty() {
+                    protobuf::Message::parse_from_bytes(msg.payload()).unwrap()
+                } else {
+                    let uattributes = {
+                        match UPClientMqtt::get_uattributes_from_mqtt_properties(msg.properties()) {
+                            Ok(uattributes) => uattributes,
+                            Err(e) => {
+                                warn!("Unable to get UAttributes from mqtt properties: {}", e);
+                                continue;
+                            }
                         }
+                    };
+    
+                    let payload = msg.payload();
+                    let upayload = payload.to_vec();
+    
+                    // Create UMessage from UAttributes and UPayload.
+                    UMessage {
+                        attributes: Some(uattributes).into(),
+                        payload: Some(upayload.into()),
+                        ..Default::default()
                     }
                 };
-
-                let payload = msg.payload();
-                let upayload = payload.to_vec();
-
-                // Create UMessage from UAttributes and UPayload.
-                let umessage = UMessage {
-                    attributes: Some(uattributes).into(),
-                    payload: Some(upayload.into()),
-                    ..Default::default()
-                };
+                
 
                 let topic_map_read = topic_map.read().await;
                 let subscription_map_read = subscription_map.read().await;
