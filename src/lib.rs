@@ -360,11 +360,9 @@ impl UPClientMqtt {
                     .properties()
                     .get_int(mqtt::PropertyCode::SubscriptionIdentifier);
 
-                info!("this is the correct version");
                 // Get attributes from mqtt header.
                 let umessage = if UPClientMqtt::get_uattributes_from_mqtt_properties(msg.properties()).is_err() {
                     debug!("empty properties");
-                    panic!();
                     protobuf::Message::parse_from_bytes(msg.payload()).unwrap()
                 } else {
                     let uattributes = {
