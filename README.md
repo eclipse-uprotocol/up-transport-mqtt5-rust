@@ -2,7 +2,7 @@
 
 ## Overview
 
-This library implements a uTransport client for MQTT5 in Rust following the uProtocol [uTransport Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/main/up-l1/README.adoc).
+This library implements a uTransport client for [MQTT5](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.4/up-l1/mqtt_5.adoc) in Rust following the uProtocol [uTransport Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/main/up-l1/README.adoc) for spec version 1.6.0-alpha.4.
 
 ## Getting Started
 
