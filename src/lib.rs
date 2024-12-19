@@ -13,7 +13,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    ops::Deref,
     str::FromStr,
     sync::Arc,
 };
@@ -98,6 +97,20 @@ fn sub_id(id: i32) -> mqtt::Properties {
     mqtt::properties![
         mqtt::PropertyCode::SubscriptionIdentifier => id
     ]
+}
+
+// Push a user property from UAttributes to the MQTT Properties
+fn push_user_property(
+    properties: &mut mqtt::Properties,
+    code: &str,
+    value: &str,
+    error_message: &str,
+) -> Result<(), UStatus> {
+    properties
+        .push_string_pair(mqtt::PropertyCode::UserProperty, code, value)
+        .map_err(|e| {
+            UStatus::fail_with_code(UCode::INTERNAL, format!("{error_message}, err: {e:?}"))
+        })
 }
 
 #[async_trait]
@@ -606,16 +619,6 @@ impl UPClientMqtt {
                 UStatus::fail_with_code(UCode::INTERNAL, format!("Invalid uAttributes, err: {e:?}"))
             })?;
 
-        // Add uAttributes version number to properties.
-        properties
-            .push_string_pair(mqtt::PropertyCode::UserProperty, "0", "1")
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to create version mqtt property, err: {e:?}"),
-                )
-            })?;
-
         // Add ttl to properties as message expiry time
         if let Some(message_expiry_interval) = attributes.ttl {
             properties
@@ -631,162 +634,109 @@ impl UPClientMqtt {
                 })?;
         }
 
-        // Iterate over all fields in UAttributes and extract protobuf field numbers and values.
-        for field in attributes.descriptor_dyn().fields() {
-            // Get protobuf field number as string.
-            let field_proto_number = field.number().to_string();
+        // Add uAttributes version number to user properties.
+        push_user_property(
+            &mut properties,
+            "0",
+            "1",
+            "Unable to add uAttributes Version to mqtt User Properties",
+        )?;
 
-            // If field is not singular, log warning and skip field.
-            if !field.is_singular() {
-                warn!(
-                    "Unable to process non-singular field type: {}",
-                    field.name()
-                );
-                continue;
-            }
+        // Add message ID as user property 1
+        push_user_property(
+            &mut properties,
+            "1",
+            &attributes.id.to_hyphenated_string(),
+            "Unable to add message ID to mqtt User Properties",
+        )?;
 
-            // log if field value is not present.
-            let Some(field_val_wrapped) = field.get_singular(attributes) else {
-                trace!("Field value not present for field: {}", field.name());
-                continue;
-            };
+        // Add message type as user property 2
+        push_user_property(
+            &mut properties,
+            "2",
+            &attributes.type_.value().to_string(),
+            "Unable to add message type to mqtt User Properties",
+        )?;
 
-            match field_val_wrapped.get_type() {
-                protobuf::reflect::RuntimeType::U32 => {
-                    if let Some(u32_val) = field_val_wrapped.to_u32() {
-                        properties
-                            .push_string_pair(
-                                mqtt::PropertyCode::UserProperty,
-                                &field_proto_number,
-                                &u32_val.to_string(),
-                            )
-                            .map_err(|e| {
-                                UStatus::fail_with_code(
-                                    UCode::INTERNAL,
-                                    format!("Unable to create u32 mqtt property, err: {e:?}"),
-                                )
-                            })?;
-                    }
-                }
-                protobuf::reflect::RuntimeType::String => {
-                    if let Some(string_val) = field_val_wrapped.to_str() {
-                        properties
-                            .push_string_pair(
-                                mqtt::PropertyCode::UserProperty,
-                                &field_proto_number,
-                                string_val,
-                            )
-                            .map_err(|e| {
-                                UStatus::fail_with_code(
-                                    UCode::INTERNAL,
-                                    format!("Unable to create string mqtt property, err: {e:?}"),
-                                )
-                            })?;
-                    }
-                }
-                protobuf::reflect::RuntimeType::Enum(_) => {
-                    if let Some(enum_number) = field_val_wrapped.to_enum_value() {
-                        properties
-                            .push_string_pair(
-                                mqtt::PropertyCode::UserProperty,
-                                &field_proto_number,
-                                &enum_number.to_string(),
-                            )
-                            .map_err(|e| {
-                                UStatus::fail_with_code(
-                                    UCode::INTERNAL,
-                                    format!("Unable to create enum mqtt property, err: {e:?}"),
-                                )
-                            })?;
-                    }
-                }
-                protobuf::reflect::RuntimeType::Message(descriptor) => {
-                    // Get type name of message to use for downcasting.
-                    let message_type_name: &str = &descriptor.name().to_ascii_lowercase();
+        // Add message source as user property 3
+        push_user_property(
+            &mut properties,
+            "3",
+            &attributes.source.to_string(),
+            "Unable to add message source to mqtt User Properties",
+        )?;
 
-                    // If field value can be unwrapped as a MessageRef, process the field value.
-                    // Currently only set up to process `UUID` and `UURI` types. Add more as needed.
-                    let Some(field_val) = field_val_wrapped.to_message() else {
-                        return Err(UStatus::fail_with_code(
-                            UCode::INTERNAL,
-                            format!(
-                                "Unable to process field value from uAttributes: {}",
-                                field.name()
-                            ),
-                        ));
-                    };
+        // Add message sink as user property 4
+        push_user_property(
+            &mut properties,
+            "4",
+            &attributes.sink.to_string(),
+            "Unable to add message sink to mqtt User Properties",
+        )?;
 
-                    let val = field_val.deref();
+        // Add message priority as user property 5
+        push_user_property(
+            &mut properties,
+            "5",
+            &attributes.priority.value().to_string(),
+            "Unable to add message priority to mqtt User Properties",
+        )?;
 
-                    match message_type_name {
-                        UUID_NAME => {
-                            let Some(uuid) = val.downcast_ref::<UUID>() else {
-                                return Err(UStatus::fail_with_code(
-                                    UCode::INTERNAL,
-                                    format!(
-                                        "Unable to downcast field value to UUID: {}",
-                                        field.name()
-                                    ),
-                                ));
-                            };
-
-                            properties
-                                .push_string_pair(
-                                    mqtt::PropertyCode::UserProperty,
-                                    &field_proto_number,
-                                    &uuid.to_hyphenated_string(),
-                                )
-                                .map_err(|e| {
-                                    UStatus::fail_with_code(
-                                        UCode::INTERNAL,
-                                        format!("Unable to create uuid mqtt property, err: {e:?}"),
-                                    )
-                                })?;
-                        }
-                        UURI_NAME => {
-                            let Some(uuri) = val.downcast_ref::<UUri>() else {
-                                return Err(UStatus::fail_with_code(
-                                    UCode::INTERNAL,
-                                    format!(
-                                        "Unable to downcast field value to UUri: {}",
-                                        field.name()
-                                    ),
-                                ));
-                            };
-
-                            let uuri_string: String = uuri.into();
-                            properties
-                                .push_string_pair(
-                                    mqtt::PropertyCode::UserProperty,
-                                    &field_proto_number,
-                                    &uuri_string,
-                                )
-                                .map_err(|e| {
-                                    UStatus::fail_with_code(
-                                        UCode::INTERNAL,
-                                        format!("Unable to create uuri mqtt property, err: {e:?}"),
-                                    )
-                                })?;
-                        }
-                        _ => {
-                            return Err(UStatus::fail_with_code(
-                                UCode::INTERNAL,
-                                format!("Unsupported message type: {}", message_type_name),
-                            ));
-                        }
-                    }
-                }
-                _ => {
-                    return Err(UStatus::fail_with_code(
-                        UCode::INTERNAL,
-                        format!(
-                            "Unsupported protobuf field type: {}",
-                            field_val_wrapped.get_type()
-                        ),
-                    ));
-                }
-            }
+        // Add message permission level as user property 7 (optional)
+        if let Some(permission_level) = &attributes.permission_level {
+            push_user_property(
+                &mut properties,
+                "7",
+                &permission_level.to_string(),
+                "Unable to add message permission level to mqtt User Properties",
+            )?;
         }
+
+        // Add message comm Status as user property 8 (optional)
+        if let Some(comm_status) = &attributes.commstatus {
+            push_user_property(
+                &mut properties,
+                "8",
+                &comm_status.value().to_string(),
+                "Unable to add message comm status to mqtt User Properties",
+            )?;
+        }
+
+        // Add message reqId as user property 9
+        push_user_property(
+            &mut properties,
+            "9",
+            &attributes.reqid.to_hyphenated_string(),
+            "Unable to add message reqId to mqtt User Properties",
+        )?;
+
+        // Add message token as user property 10 (optional)
+        if let Some(token) = &attributes.token {
+            push_user_property(
+                &mut properties,
+                "10",
+                token,
+                "Unable to add message token to mqtt User Properties",
+            )?;
+        }
+
+        // Add message traceparent as user property 11 (optional)
+        if let Some(traceparent) = &attributes.traceparent {
+            push_user_property(
+                &mut properties,
+                "11",
+                traceparent,
+                "Unable to add message traceparent to mqtt User Properties",
+            )?;
+        }
+
+        // Add message payload format as user property 12
+        push_user_property(
+            &mut properties,
+            "12",
+            &attributes.payload_format.value().to_string(),
+            "Unable to add message payload format to mqtt User Properties",
+        )?;
 
         Ok(properties)
     }
