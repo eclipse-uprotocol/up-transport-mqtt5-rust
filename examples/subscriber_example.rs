@@ -22,7 +22,7 @@ use log::LevelFilter;
 use up_rust::{UListener, UMessage, UStatus, UTransport, UUri, UUID};
 use up_transport_mqtt5::{MqttConfig, MqttProtocol, UPClientMqtt, UPClientMqttType};
 
-const WILDCARD_ENTITY_ID: u32 = 0x0000_FFFF;
+const WILDCARD_ENTITY_ID: u32 = 0xFFFF_FFFF;
 const WILDCARD_ENTITY_VERSION: u32 = 0x0000_00FF;
 const WILDCARD_RESOURCE_ID: u32 = 0x0000_FFFF;
 

@@ -61,6 +61,7 @@ async fn main() -> Result<(), UStatus> {
             .unwrap()
             .as_secs();
         let message = UMessageBuilder::publish(source.clone())
+            .with_ttl(3600)
             .build_with_payload(
                 current_time.to_string(),
                 UPayloadFormat::UPAYLOAD_FORMAT_TEXT,
