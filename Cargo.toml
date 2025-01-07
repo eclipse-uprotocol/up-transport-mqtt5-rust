@@ -42,7 +42,10 @@ log = { version = "0.4" }
 paho-mqtt = { version = "0.12.3", features = ["vendored-ssl"] }
 protobuf = { version = "3.3" }
 tokio = { version = "1.38", features = ["full"] }
-up-rust = { version = "0.3.0", default-features = false }
+up-rust = { version = "0.3.0", default-features = false, features = [
+    "test-util",
+] }
 
 [dev-dependencies]
+mockall = { version = "0.13" }
 test-case = { version = "3.3" }

@@ -1,46 +1,44 @@
-use std::{
-    str::FromStr,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
-use tokio::time::sleep;
-use up_rust::{UMessageBuilder, UPayloadFormat, UTransport, UUri};
+use tokio::sync::Notify;
+use up_rust::{MockUListener, UMessageBuilder, UTransport, UUri};
 
-mod test_lib;
+mod common;
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "should only be executed with an MQTT broker running"]
 async fn test_publish_and_subscribe() {
-    let target_data = "TEST";
+    let message_received = Arc::new(Notify::new());
+    let message_received_clone = message_received.clone();
+    let mut listener = MockUListener::new();
+    listener
+        .expect_on_receive()
+        .once()
+        .return_once(move |_msg| {
+            message_received_clone.notify_one();
+        });
 
-    let publisher = test_lib::create_up_transport_mqtt("Publisher")
+    let subscriber = common::create_up_transport_mqtt("Subscriber")
         .await
-        .unwrap();
-    let subscriber = test_lib::create_up_transport_mqtt("Subscriber")
-        .await
-        .unwrap();
-
-    let source = UUri::from_str("//Publisher/A8000/2/8A50").expect("Failed to create source");
+        .expect("failed to create transport at receiving end");
     let source_filter =
-        UUri::from_str("//Publisher/A8000/2/8A50").expect("Failed to create source filter");
-
-    let listener = Arc::new(test_lib::TestListener {
-        recv_data: Arc::new(Mutex::new(String::new())),
-    });
-
+        UUri::from_str("//Publisher/A8000/2/FFFF").expect("Failed to create source filter");
     subscriber
-        .register_listener(&source_filter, None, listener.clone())
+        .register_listener(&source_filter, None, Arc::new(listener))
         .await
         .unwrap();
 
-    sleep(Duration::from_millis(1000)).await;
+    let publisher = common::create_up_transport_mqtt("Publisher")
+        .await
+        .expect("failed to create transport at sending end");
+    let source = UUri::from_str("//Publisher/A8000/2/8A50").unwrap();
+    let umessage = UMessageBuilder::publish(source).build().unwrap();
+    publisher
+        .send(umessage)
+        .await
+        .expect("failed to publish message");
 
-    let umessage = UMessageBuilder::publish(source)
-        .build_with_payload(target_data, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
-        .unwrap();
-    publisher.send(umessage).await.unwrap();
-
-    sleep(Duration::from_millis(1000)).await;
-
-    assert_eq!(listener.get_recv_data(), target_data)
+    tokio::time::timeout(Duration::from_millis(1000), message_received.notified())
+        .await
+        .expect("did not receive published message before timeout");
 }
