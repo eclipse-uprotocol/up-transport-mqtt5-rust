@@ -12,9 +12,8 @@
 ################################################################################
 
 [package]
-author = "Eclipse Foundation uProtocol project"
-description = "MQTT5 Rust Transport library implementation for Eclipse uProtocol"
-documentation = "https://github.com/eclipse-uprotocol/up-spec#readme"
+description = "The Eclipse uProtocol MQTT 5 Transport Library"
+documentation = "https://github.com/eclipse-uprotocol/up-spec"
 edition = "2021"
 exclude = [
     "tests/*",
@@ -34,23 +33,16 @@ rust-version = "1.76"
 version = "0.2.0"
 
 [dependencies]
-async-channel = {version = "1.6" } 
+async-channel = { version = "1.6" }
 async-trait = { version = "0.1" }
 bytes = { version = "1.5" }
 env_logger = { version = "0.10" }
 futures = { version = "0.3" }
-log = { version = "^0.4" }
+log = { version = "0.4" }
 paho-mqtt = { version = "0.12.3", features = ["vendored-ssl"] }
 protobuf = { version = "3.3" }
-rand = { version = "0.8" }
-regex = { version = "1.10" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
 tokio = { version = "1.38", features = ["full"] }
-tokio-macros = { version = "2.3" }
-up-rust = "0.3.0"
-url = { version = "2.5" }
-uuid = { version = "1.7", features = ["v8"] }
+up-rust = { version = "0.3.0", default-features = false }
 
 [dev-dependencies]
 test-case = { version = "3.3" }
