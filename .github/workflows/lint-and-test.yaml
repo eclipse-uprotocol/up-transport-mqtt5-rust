@@ -28,23 +28,47 @@ concurrency:
       group: ${{ github.ref }}-${{ github.workflow }}
       cancel-in-progress: true
 
-jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
+env:
+  RUST_TOOLCHAIN: ${{ vars.RUST_TOOLCHAIN || 'stable' }}
+  RUSTFLAGS: -Dwarnings
+  CARGO_TERM_COLOR: always
 
+jobs:
+  check:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable toolchain
+      - uses: dtolnay/rust-toolchain@master
+        with: 
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Run cargo check
         run: |
-          rustup show
-          rustup component add rustfmt clippy
-      - name: cargo fmt
-        working-directory: ${{github.workspace}}
-        run: cargo fmt -- --check
-      - name: cargo clippy
-        working-directory: ${{github.workspace}}
-        run: cargo clippy --all-targets -- -W warnings -D warnings
+          cargo check --all --tests
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with: 
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - name: Run cargo fmt
+        run: |
+          cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with: 
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - name: Run cargo clippy
+        run: |
+          cargo clippy --version
+          cargo clippy --all-targets -- -W warnings -D warnings
 
   test:
     name: Test
@@ -52,12 +76,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install dependencies
-        run: |
-          cargo install cargo-tarpaulin
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y netcat-openbsd cmake
+      - uses: dtolnay/rust-toolchain@master
+        with: 
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@cargo-tarpaulin
+      - uses: Swatinem/rust-cache@v2
       - name: Show toolchain information
         working-directory: ${{github.workspace}}
         run: |
@@ -65,8 +89,7 @@ jobs:
           cargo --version
       - name: Start Mosquitto
         run: |
-          cd ./tests/mosquitto
-          docker compose up -d
+          docker compose -f tests/mosquitto/docker-compose.yaml up --detach
       - name: Wait for MQTT broker to be available
         run: |
           until nc -z localhost 1883; do
@@ -76,7 +99,7 @@ jobs:
       - name: Run tests and report code coverage
         run: |
           # enable nightly features so that we can also include Doctests
-          RUSTC_BOOTSTRAP=1 cargo tarpaulin -o xml -o lcov -o html --doc --tests
+          RUSTC_BOOTSTRAP=1 cargo tarpaulin -o xml -o lcov -o html --doc --tests -- --include-ignored
 
       - name: Upload coverage report (xml)
         uses: actions/upload-artifact@v4
@@ -96,18 +119,15 @@ jobs:
           name: Test Coverage Results (html)
           path: tarpaulin-report.html
 
-      # - name: Upload coverage report
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: Code coverage report
-      #     path: cobertura.xml
-
   build-docs:
-    name: Build documentation
     runs-on: ubuntu-latest
-
+    env:
+      RUSTDOCFLAGS: -Dwarnings
     steps:
       - uses: actions/checkout@v4
-      - name: Create Documentation
-        working-directory: ${{github.workspace}}
-        run: RUSTDOCFLAGS=-Dwarnings cargo doc -p up-rust --no-deps
+      - uses: dtolnay/rust-toolchain@master
+        with: 
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Run rustdoc
+        run: |
+          cargo doc --no-deps --all-features
