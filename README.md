@@ -1,14 +1,14 @@
-# Eclipse uProtocol Rust MQTT5 Client
+# Eclipse uProtocol MQTT 5 Transport Library for Rust
 
 ## Overview
 
-This library implements a uTransport client for [MQTT5](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.4/up-l1/mqtt_5.adoc) in Rust following the uProtocol [uTransport Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/main/up-l1/README.adoc) for spec version 1.6.0-alpha.4.
+This library provides a Rust based implementation of the [MQTT 5 uProtocol Transport v1.6.0-alpha.4](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.4/up-l1/mqtt_5.adoc).
 
 ## Getting Started
 
 ### Building the Library
 
-To build the library, run `cargo build` in the project root directory. Tests can be run with `cargo test`. This library leverages the [up-rust](https://github.com/eclipse-uprotocol/up-rust/tree/main) library for data types and models specified by uProtocol.
+To build the library, run `cargo build` in the project root directory.
 
 ### Running the Tests
 
@@ -19,43 +19,32 @@ cargo test
 
 ### Running the Examples
 
-1. Start an MQTT broker or use the included Mosquitto broker:
-```bash
-cd tests/mosquitto
-docker compose up
-```
+The example shows how the transport can be used to publish uProtocol messages from one uEntity and consume these messages on another uEntity.
 
-2. Set up your environment (for example with a config file at .cargo/config.toml)
-
-Make sure to set these parameters:
-```toml
-[env]
-MQTT_PROTOCOL = "'mqtt' or 'mqtts'"
-MQTT_PORT = "8883 for ssl encrypted mqtt"
-MQTT_HOSTNAME = "the hostname/ url of the broker"
-KEY_STORE = "the .pem file location corresponding to an ssl certificate (if using mqtts)"
-PRIVATE_KEY_PW = "the password to the .pem file (if using mqtts)"
-CLIENT_NAME = "the name of the eventgrid client (if using mqtts)"
-```
-
-3. Start the following two examples from your repo root directory.
+1. Start the Eclipse Mosquitto MQTT broker using Docker Compose:
 
 ```bash
-cargo run --example publisher_example
+docker compose -f tests/mosquitto/docker-compose.yaml up --detach
 ```
+
+2. Run the Subscriber
 
 ```bash
 cargo run --example subscriber_example
 ```
 
-This shows an example of a UPMqttClient publishing from one device and a UPMqttClient subscribing to the publishing device to receive data.
+3. Run the Publisher
+
+```bash
+cargo run --example publisher_example
+```
 
 ### Using the Library
 
 The library contains the following modules:
 
-Package | [uProtocol spec](https://github.com/eclipse-uprotocol/uprotocol-spec) | Purpose
----|---|---
-transport | [uP-L1 Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/main/up-l1/README.adoc) | Implementation of MQTT5 uTransport client used for bidirectional point-2-point communication between uEs.
+| Module    | uProtocol Specification                                                                                 | Purpose                                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| transport | [uP-L1 Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/main/up-l1/README.adoc) | Implementation of MQTT5 uTransport client used for bidirectional point-2-point communication between uEs. |
 
-Please refer to the [publisher_example](/examples/publisher_example.rs) and [subscriber_example](/examples/subscriber_example.rs) examples to see how to initialize and use the [UPClientMqtt](/src/transport.rs) client.
+Please refer to the [publisher_example](/examples/publisher_example.rs) and [subscriber_example](/examples/subscriber_example.rs) to see how to initialize and use the transport.
