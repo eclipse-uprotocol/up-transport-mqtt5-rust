@@ -604,6 +604,9 @@ impl UPClientMqtt {
     }
 
     /// Create mqtt header properties from UAttributes information.
+    /// The Message Expiry Interval gets mapped to the TTL MQTT property.
+    /// An optional UAttribute that is None gets mapped as None.
+    /// A mandatory UAttribue that has the default value gets mapped to None.
     ///
     /// # Arguments
     /// * `attributes` - UAttributes to create properties from.
@@ -659,28 +662,34 @@ impl UPClientMqtt {
         )?;
 
         // Add message source as user property 3
-        push_user_property(
-            &mut properties,
-            "3",
-            &attributes.source.to_string(),
-            "Unable to add message source to mqtt User Properties",
-        )?;
+        if let Some(source) = attributes.source.to_owned().into_option() {
+            push_user_property(
+                &mut properties,
+                "3",
+                &source.to_uri(false),
+                "Unable to add message source to mqtt User Properties",
+            )?;
+        };
 
         // Add message sink as user property 4
-        push_user_property(
-            &mut properties,
-            "4",
-            &attributes.sink.to_string(),
-            "Unable to add message sink to mqtt User Properties",
-        )?;
+        if let Some(sink) = attributes.sink.to_owned().into_option() {
+            push_user_property(
+                &mut properties,
+                "4",
+                &sink.to_uri(false),
+                "Unable to add message sink to mqtt User Properties",
+            )?
+        };
 
-        // Add message priority as user property 5
-        push_user_property(
-            &mut properties,
-            "5",
-            &attributes.priority.value().to_string(),
-            "Unable to add message priority to mqtt User Properties",
-        )?;
+        // Add message priority as user property 5 (map 0 => None)
+        if attributes.priority.value() != 0 {
+            push_user_property(
+                &mut properties,
+                "5",
+                &attributes.priority.value().to_string(),
+                "Unable to add message priority to mqtt User Properties",
+            )?
+        };
 
         // Add message permission level as user property 7 (optional)
         if let Some(permission_level) = &attributes.permission_level {
@@ -702,13 +711,15 @@ impl UPClientMqtt {
             )?;
         }
 
-        // Add message reqId as user property 9
-        push_user_property(
-            &mut properties,
-            "9",
-            &attributes.reqid.to_hyphenated_string(),
-            "Unable to add message reqId to mqtt User Properties",
-        )?;
+        // Add message reqId as user property 9 (map "00000000-0000-0000-0000-000000000000" => None)
+        if let Some(req_id) = attributes.reqid.to_owned().into_option() {
+            push_user_property(
+                &mut properties,
+                "9",
+                &req_id.to_hyphenated_string(),
+                "Unable to add message reqId to mqtt User Properties",
+            )?;
+        }
 
         // Add message token as user property 10 (optional)
         if let Some(token) = &attributes.token {
@@ -731,12 +742,14 @@ impl UPClientMqtt {
         }
 
         // Add message payload format as user property 12
-        push_user_property(
-            &mut properties,
-            "12",
-            &attributes.payload_format.value().to_string(),
-            "Unable to add message payload format to mqtt User Properties",
-        )?;
+        if attributes.payload_format.value() != 0 {
+            push_user_property(
+                &mut properties,
+                "12",
+                &attributes.payload_format.value().to_string(),
+                "Unable to add message payload format to mqtt User Properties",
+            )?;
+        }
 
         Ok(properties)
     }
@@ -1422,7 +1435,7 @@ mod tests {
             Some(3600),
             None, None, None, None, None, None
         ),
-        8,
+        7,
         None;
         "Request success"
     )]
@@ -1457,12 +1470,16 @@ mod tests {
         expected_attributes_num: usize,
         expected_error: Option<UStatus>,
     ) {
+        // Create the mqtt properties from the input UAttributes
         let props = UPClientMqtt::create_mqtt_properties_from_uattributes(&attributes);
 
+        // Check if properties could be created at all
         if props.is_ok() {
-            let actual_props = props.unwrap();
-            assert_eq!(actual_props.len(), expected_attributes_num);
-            actual_props.user_iter().for_each(|(key, value)| {
+            let constructed_props = props.unwrap();
+            assert_eq!(constructed_props.len(), expected_attributes_num);
+            // Iterate over all created properties and compare with the expected properties
+            constructed_props.user_iter().for_each(|(key, value)| {
+                println!("{}", key);
                 let expected_prop = properties.find_user_property(&key);
                 assert_eq!(Some(value), expected_prop);
             });
