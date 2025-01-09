@@ -69,56 +69,16 @@ impl UTransport for UPClientMqtt {
 mod tests {
     use std::{collections::HashMap, str::FromStr};
 
-    use paho_mqtt::{self as mqtt, AsyncReceiver, Message};
     use up_rust::{
-        ComparableListener, UListener, UMessageBuilder, UMessageType, UPayloadFormat, UUID,
+        ComparableListener, MockUListener, UMessageBuilder, UMessageType, UPayloadFormat, UUID,
     };
 
     use test_case::test_case;
     use tokio::sync::RwLock;
 
-    use crate::{MockableMqttClient, MqttConfig, UPClientMqttType};
+    use crate::{MockMqttClientOperations, UPClientMqttType};
 
     use super::*;
-
-    // Simple listener for testing.
-    pub struct SimpleListener {}
-
-    #[async_trait]
-    impl UListener for SimpleListener {
-        async fn on_receive(&self, message: UMessage) {
-            println!("Received message: {:?}", message);
-        }
-    }
-
-    // Mock Mqtt client for testing.
-    pub struct MockMqttClient {}
-
-    #[async_trait]
-    impl MockableMqttClient for MockMqttClient {
-        async fn new_client(
-            _config: MqttConfig,
-            _client_id: UUID,
-        ) -> Result<(Self, AsyncReceiver<Option<Message>>), UStatus>
-        where
-            Self: Sized,
-        {
-            let (_tx, rx) = async_channel::bounded(1);
-            Ok((Self {}, rx))
-        }
-
-        async fn publish(&self, _mqtt_message: mqtt::Message) -> Result<(), UStatus> {
-            Ok(())
-        }
-
-        async fn subscribe(&self, _topic: &str, _id: i32) -> Result<(), UStatus> {
-            Ok(())
-        }
-
-        async fn unsubscribe(&self, _topic: &str) -> Result<(), UStatus> {
-            Ok(())
-        }
-    }
 
     // Helper function to construct UMessage object for testing.
     fn create_test_message(
@@ -126,46 +86,41 @@ mod tests {
         source: &str,
         sink: Option<&str>,
         payload: String,
-    ) -> Result<UMessage, UStatus> {
+    ) -> UMessage {
         let source_uri = UUri::from_str(source).expect("Expected a valid source value");
 
         match message_type {
-            UMessageType::UMESSAGE_TYPE_PUBLISH => Ok(UMessageBuilder::publish(source_uri)
-                .build_with_payload(payload.clone(), UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
-                .unwrap()),
+            UMessageType::UMESSAGE_TYPE_PUBLISH => UMessageBuilder::publish(source_uri)
+                .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
+                .unwrap(),
             UMessageType::UMESSAGE_TYPE_REQUEST => {
                 let sink_uri =
                     UUri::from_str(sink.expect("Expected a sink value for request message"))
-                        .expect("Exoected a valid sink value");
+                        .expect("Expected a valid sink value");
 
-                Ok(UMessageBuilder::request(source_uri, sink_uri, 3600)
-                    .build_with_payload(payload.clone(), UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
-                    .unwrap())
+                UMessageBuilder::request(source_uri, sink_uri, 3600)
+                    .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
+                    .unwrap()
             }
             UMessageType::UMESSAGE_TYPE_RESPONSE => {
                 let sink_uri =
                     UUri::from_str(sink.expect("Expected a sink value for request message"))
-                        .expect("Exoected a valid sink value");
+                        .expect("Expected a valid sink value");
 
-                Ok(
-                    UMessageBuilder::response(source_uri, UUID::build(), sink_uri)
-                        .build_with_payload(payload.clone(), UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
-                        .unwrap(),
-                )
+                UMessageBuilder::response(source_uri, UUID::build(), sink_uri)
+                    .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
+                    .unwrap()
             }
             UMessageType::UMESSAGE_TYPE_NOTIFICATION => {
                 let sink_uri =
                     UUri::from_str(sink.expect("Expected a sink value for notification message"))
-                        .expect("Exoected a valid sink value");
+                        .expect("Expected a valid sink value");
 
-                Ok(UMessageBuilder::notification(source_uri, sink_uri)
+                UMessageBuilder::notification(source_uri, sink_uri)
                     .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
-                    .unwrap())
+                    .unwrap()
             }
-            _ => Err(UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
-                "Invalid message type",
-            )),
+            _ => panic!("Invalid message type"),
         }
     }
 
@@ -207,10 +162,19 @@ mod tests {
         source: &str,
         sink: Option<&str>,
         payload: &str,
-        expected_error: Option<UStatus>,
+        expected_error_code: Option<UCode>,
     ) {
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations
+            .expect_publish()
+            .once()
+            .return_once(move |_msg| {
+                expected_error_code.map_or(Ok(()), |code| {
+                    Err(UStatus::fail_with_code(code, "failed to send message"))
+                })
+            });
         let client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(client_operations),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "VIN.vehicles".to_string(),
@@ -219,15 +183,13 @@ mod tests {
             cb_message_handle: None,
         };
 
-        let message = create_test_message(message_type, source, sink, payload.to_string()).unwrap();
+        let message = create_test_message(message_type, source, sink, payload.to_string());
+        let send_result = client.send(message).await;
 
-        let result = client.send(message).await;
-
-        if result.is_err() {
-            assert_eq!(result.err().unwrap(), expected_error.unwrap());
+        if let Some(error_code) = expected_error_code {
+            assert!(send_result.is_err_and(|err| err.get_code() == error_code));
         } else {
-            assert!(result.is_ok());
-            assert!(expected_error.is_none());
+            assert!(send_result.is_ok());
         }
     }
 
@@ -250,12 +212,20 @@ mod tests {
         source_filter: &str,
         sink_filter: Option<&str>,
         expected_topic: &str,
-        expected_error: Option<UStatus>,
+        expected_error_code: Option<UCode>,
     ) {
         let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations.expect_subscribe().once().return_once(
+            move |_topic_filter, _subscription_id| {
+                expected_error_code.map_or(Ok(()), |code| {
+                    Err(UStatus::fail_with_code(code, "failed to send message"))
+                })
+            },
+        );
 
         let client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(client_operations),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map,
             authority_name: "VIN.vehicles".to_string(),
@@ -264,21 +234,20 @@ mod tests {
             cb_message_handle: None,
         };
 
-        let listener = Arc::new(SimpleListener {});
+        let listener = Arc::new(MockUListener::new());
 
         let source_uri = UUri::from_str(source_filter).expect("Expected a valid source value");
 
         let sink_uri = sink_filter.map(|s| UUri::from_str(s).expect("Expected a valid sink value"));
 
-        let result = client
+        let send_result = client
             .register_listener(&source_uri, sink_uri.as_ref(), listener.clone())
             .await;
 
-        if result.is_err() {
-            assert_eq!(result.err().unwrap(), expected_error.unwrap());
+        if let Some(error_code) = expected_error_code {
+            assert!(send_result.is_err_and(|err| err.get_code() == error_code));
         } else {
-            assert!(result.is_ok());
-            assert!(expected_error.is_none());
+            assert!(send_result.is_ok());
         }
 
         let topic_map = client.topic_listener_map.read().await;
@@ -309,11 +278,20 @@ mod tests {
         source_filter: &str,
         sink_filter: Option<&str>,
         expected_topic: &str,
-        expected_error: Option<UStatus>,
+        expected_error_code: Option<UCode>,
     ) {
         let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations
+            .expect_unsubscribe()
+            .once()
+            .return_once(move |_topic_filter| {
+                expected_error_code.map_or(Ok(()), |code| {
+                    Err(UStatus::fail_with_code(code, "failed to send message"))
+                })
+            });
 
-        let listener = Arc::new(SimpleListener {});
+        let listener = Arc::new(MockUListener::new());
         let comparable_listener = ComparableListener::new(listener.clone());
 
         topic_listener_map.write().await.insert(
@@ -322,7 +300,7 @@ mod tests {
         );
 
         let client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(client_operations),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map,
             authority_name: "VIN.vehicles".to_string(),
@@ -335,15 +313,14 @@ mod tests {
 
         let sink_uri = sink_filter.map(|s| UUri::from_str(s).expect("Expected a valid sink value"));
 
-        let result = client
+        let send_result = client
             .unregister_listener(&source_uri, sink_uri.as_ref(), listener.clone())
             .await;
 
-        if result.is_err() {
-            assert_eq!(result.err().unwrap(), expected_error.unwrap());
+        if let Some(error_code) = expected_error_code {
+            assert!(send_result.is_err_and(|err| err.get_code() == error_code));
         } else {
-            assert!(result.is_ok());
-            assert!(expected_error.is_none());
+            assert!(send_result.is_ok());
         }
 
         {
@@ -355,13 +332,6 @@ mod tests {
             .unregister_listener(&source_uri, sink_uri.as_ref(), listener.clone())
             .await;
 
-        assert!(empty_result.is_err());
-        assert_eq!(
-            empty_result.err().unwrap(),
-            UStatus::fail_with_code(
-                UCode::NOT_FOUND,
-                format!("Topic '{expected_topic}' is not registered.")
-            )
-        );
+        assert!(empty_result.is_err_and(|err| { err.get_code() == UCode::NOT_FOUND }));
     }
 }

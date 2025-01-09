@@ -39,8 +39,9 @@ const UURI_NAME: &str = "uuri";
 const UUID_NAME: &str = "uuid";
 
 /// Trait that allows for a mockable mqtt client.
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub trait MockableMqttClient: Sync + Send {
+pub trait MqttClientOperations: Sync + Send {
     /// Create a new MockableMqttClient.
     ///
     /// # Arguments
@@ -101,7 +102,7 @@ fn sub_id(id: i32) -> mqtt::Properties {
 }
 
 #[async_trait]
-impl MockableMqttClient for AsyncMqttClient {
+impl MqttClientOperations for AsyncMqttClient {
     /// Create a new MockableMqttClient.
     ///
     /// # Arguments
@@ -254,7 +255,7 @@ pub struct MqttConfig {
 /// UP Client for mqtt.
 pub struct UPClientMqtt {
     /// Client instance for connecting to mqtt broker.
-    mqtt_client: Arc<dyn MockableMqttClient>,
+    mqtt_client: Arc<dyn MqttClientOperations>,
     /// Map of subscription identifiers to subscribed topics.
     subscription_topic_map: Arc<RwLock<HashMap<i32, String>>>,
     /// Map of topics to listeners.
@@ -970,7 +971,7 @@ impl UPClientMqtt {
 #[cfg(test)]
 mod tests {
     use protobuf::Enum;
-    use up_rust::{UListener, UMessageType, UPayloadFormat, UPriority, UUID};
+    use up_rust::{MockUListener, UMessageType, UPayloadFormat, UPriority, UUID};
 
     use test_case::test_case;
 
@@ -996,45 +997,6 @@ mod tests {
     pub const TOKEN_NUM: &str = "10";
     pub const TRACEPARENT_NUM: &str = "11";
     pub const PAYLOAD_NUM: &str = "12";
-
-    // Simple listener for testing.
-    pub struct SimpleListener {}
-
-    #[async_trait]
-    impl UListener for SimpleListener {
-        async fn on_receive(&self, message: UMessage) {
-            println!("Received message: {:?}", message);
-        }
-    }
-
-    // Mock Mqtt client for testing.
-    pub struct MockMqttClient {}
-
-    #[async_trait]
-    impl MockableMqttClient for MockMqttClient {
-        async fn new_client(
-            _config: MqttConfig,
-            _client_id: UUID,
-        ) -> Result<(Self, AsyncReceiver<Option<Message>>), UStatus>
-        where
-            Self: Sized,
-        {
-            let (_tx, rx) = async_channel::bounded(1);
-            Ok((Self {}, rx))
-        }
-
-        async fn publish(&self, _mqtt_message: mqtt::Message) -> Result<(), UStatus> {
-            Ok(())
-        }
-
-        async fn subscribe(&self, _topic: &str, _id: i32) -> Result<(), UStatus> {
-            Ok(())
-        }
-
-        async fn unsubscribe(&self, _topic: &str) -> Result<(), UStatus> {
-            Ok(())
-        }
-    }
 
     // Helper function used to create a UAttributes object and mqtt properties object for testing and comparison.
     #[allow(clippy::too_many_arguments)]
@@ -1282,7 +1244,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_free_subscription_id() {
         let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(MockMqttClientOperations::new()),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "test".to_string(),
@@ -1322,7 +1284,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_free_subscription_id() {
         let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(MockMqttClientOperations::new()),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "test".to_string(),
@@ -1342,13 +1304,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_listener() {
-        let listener = Arc::new(SimpleListener {});
+        let listener = Arc::new(MockUListener::new());
         let expected_listener = ComparableListener::new(listener.clone());
         let sub_map = Arc::new(RwLock::new(HashMap::new()));
         let topic_map = Arc::new(RwLock::new(HashMap::new()));
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations
+            .expect_subscribe()
+            .once()
+            .return_const(Ok(()));
 
         let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(client_operations),
             subscription_topic_map: sub_map.clone(),
             topic_listener_map: topic_map.clone(),
             authority_name: "test".to_string(),
@@ -1373,9 +1340,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_listener() {
-        let listener_1 = Arc::new(SimpleListener {});
+        let listener_1 = Arc::new(MockUListener::new());
         let comparable_listener_1 = ComparableListener::new(listener_1.clone());
-        let listener_2 = Arc::new(SimpleListener {});
+        let listener_2 = Arc::new(MockUListener::new());
         let comparable_listener_2 = ComparableListener::new(listener_2.clone());
         let sub_map = Arc::new(RwLock::new(HashMap::new()));
         let topic_map = Arc::new(RwLock::new(HashMap::new()));
@@ -1388,8 +1355,11 @@ mod tests {
                 .collect(),
         );
 
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations.expect_unsubscribe().return_const(Ok(()));
+
         let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(client_operations),
             subscription_topic_map: sub_map.clone(),
             topic_listener_map: topic_map.clone(),
             authority_name: "test".to_string(),
@@ -1619,7 +1589,7 @@ mod tests {
         let uuri = UUri::from_str(uuri).expect("expected valid UUri string.");
 
         let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(MockMqttClientOperations::new()),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "VIN.vehicles".to_string(),
@@ -1714,7 +1684,7 @@ mod tests {
             sink_uri.map(|uri| UUri::from_str(uri).expect("expected valid sink UUri string."));
 
         let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(MockMqttClientOperations::new()),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "VIN.vehicles".to_string(),
@@ -1740,7 +1710,7 @@ mod tests {
     #[test_case(UPClientMqttType::Cloud, "c"; "Client indicator")]
     fn test_get_client_identifier(client_type: UPClientMqttType, expected_str: &str) {
         let client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClient {}),
+            mqtt_client: Arc::new(MockMqttClientOperations::new()),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "test".to_string(),
