@@ -1,0 +1,71 @@
+# ********************************************************************************
+#  Copyright (c) 2024 Contributors to the Eclipse Foundation
+#
+#  See the NOTICE file(s) distributed with this work for additional
+#  information regarding copyright ownership.
+#
+#  This program and the accompanying materials are made available under the
+#  terms of the Apache License Version 2.0 which is available at
+#  https://www.apache.org/licenses/LICENSE-2.0
+#
+#  SPDX-License-Identifier: Apache-2.0
+# *******************************************************************************/
+
+# Verifies that this crate can be built using the uProtocol Core API from up-spec's main branch.
+# Also performs requirements tracing using OpenFastTrace. For that purpose, the workflow requires
+# the UP_SPEC_OPEN_FAST_TRACE_FILE_PATTERNS variable to contain the file patterns to use for
+# invoking the "run-oft" Action.
+
+name: uP Spec Compatibility
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: ${{ vars.RUST_TOOLCHAIN || 'stable' }}
+  RUSTFLAGS: -Dwarnings
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - name: Fast-Forward to HEAD revision of uProtocol Spec main branch
+        run: |
+          cd "${{ github.workspace }}/up-spec"
+          echo "Switching to up-spec/main branch ..."
+          git checkout main
+          echo "fast-forwarding to HEAD revision ..."
+          git pull
+          git status
+          cd "${{ github.workspace }}"
+
+      # run OpenFastTrace first because OFT will always succeed and produce
+      # a tracing report
+      - name: Run OpenFastTrace
+        uses: ./.github/actions/run-oft
+        with:
+          file-patterns: "${{ vars.UP_SPEC_OPEN_FAST_TRACE_FILE_PATTERNS }} ${{ vars.UP_RUST_OPEN_FAST_TRACE_FILE_PATTERNS }}"
+
+      # now try to build and run the tests which may fail if incomaptible changes
+      # have been introduced in up-spec
+      - uses: dtolnay/rust-toolchain@master
+        with: 
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Run tests
+        run: |
+          # Using nextest because it's faster than built-in test
+          cargo nextest run --all-features
+          # but it cannot execute doc tests
+          cargo test --doc --all-features

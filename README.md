@@ -6,6 +6,23 @@ This library provides a Rust based implementation of the [MQTT 5 uProtocol Trans
 
 ## Getting Started
 
+### Clone the Repository
+
+```sh
+git clone --recurse-submodules git@github.com:eclipse-uprotocol/up-rust
+```
+
+The `--recurse-submodules` parameter is important to make sure that the git submodule referring to the uProtocol specification is being initialized in the workspace. The files contained in that submodule define uProtocol's behavior and are used to trace requirements to implementation and test as part of CI workflows.
+If the repository has already been cloned without the parameter, the submodule can be initialized manually using `git submodule update --init --recursive`.
+
+In order to make sure that you pull in any subsequent changes made to submodules from upstream, you need to use
+
+```sh
+git pull --recurse-submodules
+```
+
+If you want to make Git always pull with `--recurse-submodules`, you can set the configuration option *submodule.recurse* to `true` (this works for git pull since Git 2.15). This option will make Git use the `--recurse-submodules` flag for all commands that support it (except *clone*).
+
 ### Building the Library
 
 To build the library, run `cargo build` in the project root directory.
