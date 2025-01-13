@@ -16,7 +16,7 @@ use std::{str::FromStr, time::SystemTime};
 use env_logger::{Builder, Target};
 use log::LevelFilter;
 use up_rust::{UMessageBuilder, UPayloadFormat, UStatus, UTransport, UUri, UUID};
-use up_transport_mqtt5::{MqttConfig, MqttProtocol, UPClientMqtt, UPClientMqttType};
+use up_transport_mqtt5::{MqttConfig, MqttProtocol, TransportMode, UPClientMqtt};
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
@@ -44,10 +44,10 @@ async fn main() -> Result<(), UStatus> {
     };
 
     let client = UPClientMqtt::new(
+        TransportMode::InVehicle,
         config,
         UUID::build(),
         "Vehicle_B".to_string(),
-        UPClientMqttType::Device,
     )
     .await?;
 

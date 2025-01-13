@@ -1,5 +1,5 @@
 use up_rust::{UStatus, UUID};
-use up_transport_mqtt5::{MqttConfig, MqttProtocol, UPClientMqtt, UPClientMqttType};
+use up_transport_mqtt5::{MqttConfig, MqttProtocol, TransportMode, UPClientMqtt};
 
 pub async fn create_up_transport_mqtt<S: Into<String>>(
     authority_name: S,
@@ -16,10 +16,10 @@ pub async fn create_up_transport_mqtt<S: Into<String>>(
     };
 
     UPClientMqtt::new(
+        TransportMode::InVehicle,
         config,
         UUID::build(),
         authority_name.into(),
-        UPClientMqttType::Device,
     )
     .await
 }

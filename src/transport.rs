@@ -33,8 +33,9 @@ impl UTransport for UPClientMqtt {
             UCode::INVALID_ARGUMENT,
             "Invalid source: expected a source value, none was found",
         ))?;
-        let sink_uri = attributes.sink.as_ref();
-        let topic = self.to_mqtt_topic_string(src_uri, sink_uri);
+        let topic = self
+            .to_mqtt_topic_string(src_uri, attributes.sink.as_ref())
+            .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
 
         // Extract payload from umessage to send
         let payload = message.payload;
@@ -48,7 +49,9 @@ impl UTransport for UPClientMqtt {
         sink_filter: Option<&UUri>,
         listener: Arc<dyn UListener>,
     ) -> Result<(), UStatus> {
-        let topic = self.to_mqtt_topic_string(source_filter, sink_filter);
+        let topic = self
+            .to_mqtt_topic_string(source_filter, sink_filter)
+            .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
 
         self.add_listener(&topic, listener).await
     }
@@ -59,7 +62,9 @@ impl UTransport for UPClientMqtt {
         sink_filter: Option<&UUri>,
         listener: Arc<dyn UListener>,
     ) -> Result<(), UStatus> {
-        let topic: String = self.to_mqtt_topic_string(source_filter, sink_filter);
+        let topic: String = self
+            .to_mqtt_topic_string(source_filter, sink_filter)
+            .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
 
         self.remove_listener(&topic, listener).await
     }
@@ -76,7 +81,7 @@ mod tests {
     use test_case::test_case;
     use tokio::sync::RwLock;
 
-    use crate::{MockMqttClientOperations, UPClientMqttType};
+    use crate::{MockMqttClientOperations, TransportMode};
 
     use super::*;
 
@@ -134,7 +139,7 @@ mod tests {
     )]
     #[test_case(
         UMessageType::UMESSAGE_TYPE_NOTIFICATION,
-        "//VIN.vehicles/A8000/2/1A50",
+        "/A8000/2/1A50",
         Some("//VIN.vehicles/B8000/3/0"),
         "payload",
         None;
@@ -178,7 +183,7 @@ mod tests {
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "VIN.vehicles".to_string(),
-            client_type: UPClientMqttType::Device,
+            mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
             cb_message_handle: None,
         };
@@ -196,14 +201,14 @@ mod tests {
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         None,
-        "d/VIN.vehicles/A8000/2/8A50",
+        "VIN.vehicles/A8000/2/8A50",
         None;
         "Register listener success"
     )]
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         Some("//VIN.vehicles/B8000/3/0"),
-        "d/VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0",
+        "VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0",
         None;
         "Register listener with sink success"
     )]
@@ -229,7 +234,7 @@ mod tests {
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map,
             authority_name: "VIN.vehicles".to_string(),
-            client_type: UPClientMqttType::Device,
+            mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
             cb_message_handle: None,
         };
@@ -262,14 +267,14 @@ mod tests {
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         None,
-        "d/VIN.vehicles/A8000/2/8A50",
+        "VIN.vehicles/A8000/2/8A50",
         None;
         "Unregister listener success"
     )]
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         Some("//VIN.vehicles/B8000/3/0"),
-        "d/VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0",
+        "VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0",
         None;
         "Unregister listener with sink success"
     )]
@@ -304,7 +309,7 @@ mod tests {
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map,
             authority_name: "VIN.vehicles".to_string(),
-            client_type: UPClientMqttType::Device,
+            mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
             cb_message_handle: None,
         };

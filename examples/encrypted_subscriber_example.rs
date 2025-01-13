@@ -22,7 +22,7 @@ use env_logger::{Builder, Target};
 use log::LevelFilter;
 use paho_mqtt::SslOptionsBuilder;
 use up_rust::{UListener, UMessage, UStatus, UTransport, UUri, UUID};
-use up_transport_mqtt5::{MqttConfig, MqttProtocol, UPClientMqtt, UPClientMqttType};
+use up_transport_mqtt5::{MqttConfig, MqttProtocol, TransportMode, UPClientMqtt};
 
 const WILDCARD_ENTITY_ID: u32 = 0x0000_FFFF;
 const WILDCARD_ENTITY_VERSION: u32 = 0x0000_00FF;
@@ -80,10 +80,10 @@ async fn main() -> Result<(), UStatus> {
     };
 
     let client = UPClientMqtt::new(
+        TransportMode::InVehicle,
         config,
         UUID::build(),
         "Vehicle_B".to_string(),
-        UPClientMqttType::Device,
     )
     .await?;
 

@@ -29,10 +29,109 @@ use protobuf::{Enum, EnumOrUnknown, MessageField};
 use tokio::{sync::RwLock, task::JoinHandle};
 use up_rust::{
     ComparableListener, UAttributes, UAttributesValidators, UCode, UMessage, UMessageType,
-    UPayloadFormat, UPriority, UStatus, UUri, UUID,
+    UPayloadFormat, UPriority, UStatus, UUri, UUriError, UUID,
 };
 
 pub mod transport;
+
+const MQTT_TOPIC_ANY_SEGMENT_WILDCARD: &str = "+";
+
+/// The transport's mode of operation.
+pub enum TransportMode {
+    /// Indicates communication via an in-vehicle MQTT broker. This is used by uEntities within the same vehicle
+    /// (uEntity-2-uEntity).
+    InVehicle,
+    /// Indicates communication via an off-vehicle MQTT broker. This is used by uProtocol streamers to connect a
+    /// vehicle's uEntities to uEntities running on a (cloud based) back end (Device-2-Device).
+    OffVehicle,
+}
+
+impl TransportMode {
+    /// Creates an MQTT topic segment from the authority name of a uProtocol URI.
+    fn uri_to_authority_topic_segment(uri: &UUri, fallback_authority: &str) -> String {
+        if uri.has_empty_authority() {
+            fallback_authority.to_owned()
+        } else if uri.has_wildcard_authority() {
+            MQTT_TOPIC_ANY_SEGMENT_WILDCARD.to_string()
+        } else {
+            uri.authority_name.to_owned()
+        }
+    }
+
+    /// Converts a uProtocol URI to an MQTT topic.
+    ///
+    /// # Arguments
+    ///
+    /// * `fallback_authority` - The authority name to use if the given URI does not contain an authority.
+    /// * `uri` - The URI to convert.
+    fn uri_to_e2e_mqtt_topic(uri: &UUri, fallback_authority: &str) -> String {
+        let authority = Self::uri_to_authority_topic_segment(uri, fallback_authority);
+
+        let ue_id = if uri.has_wildcard_entity_type() {
+            "+".into()
+        } else {
+            format!("{:X}", uri.ue_id)
+        };
+
+        let ue_ver = if uri.has_wildcard_version() {
+            "+".into()
+        } else {
+            format!("{:X}", uri.ue_version_major)
+        };
+
+        let res_id = if uri.has_wildcard_resource_id() {
+            "+".into()
+        } else {
+            format!("{:X}", uri.resource_id)
+        };
+
+        format!("{authority}/{ue_id}/{ue_ver}/{res_id}")
+    }
+
+    /// Creates an MQTT topic for a source and sink uProtocol URI.
+    ///
+    /// # Arguments
+    /// * `source` - Source URI.
+    /// * `sink` - Sink URI.
+    /// * `fallback_authority` - The authority name to use if any of the URIs do not contain an authority.
+    pub(crate) fn to_mqtt_topic(
+        &self,
+        source: &UUri,
+        sink: Option<&UUri>,
+        fallback_authority: &str,
+    ) -> Result<String, UUriError> {
+        match self {
+            TransportMode::InVehicle => {
+                let mut topic = String::new();
+                topic.push_str(&Self::uri_to_e2e_mqtt_topic(source, fallback_authority));
+                if let Some(uri) = sink {
+                    topic.push('/');
+                    topic.push_str(&Self::uri_to_e2e_mqtt_topic(uri, fallback_authority));
+                }
+                Ok(topic)
+            }
+            TransportMode::OffVehicle => {
+                if let Some(uri) = sink {
+                    let mut topic = String::new();
+                    topic.push_str(&Self::uri_to_authority_topic_segment(
+                        source,
+                        fallback_authority,
+                    ));
+                    topic.push('/');
+                    topic.push_str(&Self::uri_to_authority_topic_segment(
+                        uri,
+                        fallback_authority,
+                    ));
+                    Ok(topic)
+                } else {
+                    Err(UUriError::serialization_error(
+                        "Off-Vehicle transport requires sink URI for creating MQTT topic",
+                    ))
+                }
+            }
+        }
+    }
+}
 
 /// Trait that allows for a mockable mqtt client.
 #[cfg_attr(test, mockall::automock)]
@@ -272,18 +371,12 @@ pub struct UPClientMqtt {
     topic_listener_map: Arc<RwLock<HashMap<String, HashSet<ComparableListener>>>>,
     /// My authority
     authority_name: String,
-    /// Indicates where client instance is running.
-    client_type: UPClientMqttType,
+    /// The transport's mode of operation.
+    mode: TransportMode,
     /// List of free subscription identifiers to use for the client subscriptions.
     free_subscription_ids: Arc<RwLock<HashSet<i32>>>,
     /// Handle to the message callback.
     cb_message_handle: Option<JoinHandle<()>>,
-}
-
-/// Type of UPClientMqtt.
-pub enum UPClientMqttType {
-    Device,
-    Cloud,
 }
 
 /// Type of MQTT protocol
@@ -296,15 +389,15 @@ impl UPClientMqtt {
     /// Create a new UPClientMqtt.
     ///
     /// # Arguments
+    /// * `mode` - The transport's mode of operation.
     /// * `config` - Configuration for the mqtt client.
     /// * `client_id` - Client id for the mqtt client.
     /// * `authority_name` - Authority name for the mqtt client.
-    /// * `client_type` - Type of client instance.
     pub async fn new(
+        mode: TransportMode,
         config: MqttConfig,
         client_id: UUID,
         authority_name: String,
-        client_type: UPClientMqttType,
     ) -> Result<Self, UStatus> {
         let subscription_topic_map = Arc::new(RwLock::new(HashMap::new()));
         let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
@@ -329,7 +422,7 @@ impl UPClientMqtt {
             subscription_topic_map,
             topic_listener_map,
             authority_name,
-            client_type,
+            mode,
             free_subscription_ids,
             cb_message_handle,
         })
@@ -475,15 +568,6 @@ impl UPClientMqtt {
     async fn add_free_subscription_id(&self, id: i32) {
         let mut free_ids = self.free_subscription_ids.write().await;
         free_ids.insert(id);
-    }
-
-    /// Get the client indicator based on client type.
-    fn get_client_indicator(&self) -> String {
-        match self.client_type {
-            UPClientMqttType::Device => "d",
-            UPClientMqttType::Cloud => "c",
-        }
-        .to_string()
     }
 
     /// Send UMessage to mqtt topic.
@@ -930,54 +1014,18 @@ impl UPClientMqtt {
         Ok(attributes)
     }
 
-    /// Convert a UUri to a valid mqtt topic segment.
+    /// Creates an MQTT topic for a source and sink uProtocol URI.
     ///
     /// # Arguments
-    /// * `uri` - UUri to convert to mqtt topic segment.
-    fn uri_to_mqtt_topic_segment(&self, uri: &UUri) -> String {
-        let authority = if uri.has_empty_authority() {
-            &self.authority_name
-        } else if uri.has_wildcard_authority() {
-            "+"
-        } else {
-            &uri.authority_name
-        };
-
-        let ue_id = if uri.has_wildcard_entity_type() {
-            "+".into()
-        } else {
-            format!("{:X}", uri.ue_id)
-        };
-
-        let ue_ver = if uri.has_wildcard_version() {
-            "+".into()
-        } else {
-            format!("{:X}", uri.ue_version_major)
-        };
-
-        let res_id = if uri.has_wildcard_resource_id() {
-            "+".into()
-        } else {
-            format!("{:X}", uri.resource_id)
-        };
-
-        format!("{authority}/{ue_id}/{ue_ver}/{res_id}")
-    }
-
-    /// Create a valid mqtt topic based on a source and sink UUri.
-    ///
-    /// # Arguments
-    /// * `src_uri` - Source UUri.
-    /// * `sink_uri` - Optional sink UUri.
-    fn to_mqtt_topic_string(&self, src_uri: &UUri, sink_uri: Option<&UUri>) -> String {
-        let cli_indicator = &self.get_client_indicator();
-        let src_segment = &self.uri_to_mqtt_topic_segment(src_uri);
-        if let Some(sink) = sink_uri {
-            let sink_segment = self.uri_to_mqtt_topic_segment(sink);
-            return format!("{cli_indicator}/{src_segment}/{sink_segment}");
-        }
-
-        format!("{cli_indicator}/{src_segment}")
+    /// * `src_uri` - Source URI.
+    /// * `sink_uri` - Sink URI.
+    fn to_mqtt_topic_string(
+        &self,
+        src_uri: &UUri,
+        sink_uri: Option<&UUri>,
+    ) -> Result<String, UUriError> {
+        self.mode
+            .to_mqtt_topic(src_uri, sink_uri, &self.authority_name)
     }
 }
 
@@ -1263,7 +1311,7 @@ mod tests {
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "test".to_string(),
-            client_type: UPClientMqttType::Device,
+            mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..3).collect())),
             cb_message_handle: None,
         };
@@ -1303,7 +1351,7 @@ mod tests {
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "test".to_string(),
-            client_type: UPClientMqttType::Device,
+            mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..3).collect())),
             cb_message_handle: None,
         };
@@ -1334,7 +1382,7 @@ mod tests {
             subscription_topic_map: sub_map.clone(),
             topic_listener_map: topic_map.clone(),
             authority_name: "test".to_string(),
-            client_type: UPClientMqttType::Device,
+            mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
             cb_message_handle: None,
         };
@@ -1378,7 +1426,7 @@ mod tests {
             subscription_topic_map: sub_map.clone(),
             topic_listener_map: topic_map.clone(),
             authority_name: "test".to_string(),
-            client_type: UPClientMqttType::Device,
+            mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
             cb_message_handle: None,
         };
@@ -1574,14 +1622,36 @@ mod tests {
     }
 
     #[test_case(
-        "//VIN.vehicles/A8000/2/8A50",
-        "VIN.vehicles/A8000/2/8A50";
-        "Valid uuri"
+        "up://VIN.vehicles/A8000/2/8A50",
+        "VIN.vehicles";
+        "Valid UUri"
     )]
     #[test_case(
         "A8000/2/8A50",
+        "local_authority";
+        "Local UUri"
+    )]
+    #[test_case(
+        &format!("//{WILDCARD_AUTHORITY}/A8000/2/8A50"),
+        MQTT_TOPIC_ANY_SEGMENT_WILDCARD;
+        "Wildcard authority"
+    )]
+    fn test_uri_to_authority_topic_segment(uri: &str, expected_segment: &str) {
+        let uuri = UUri::from_str(uri).expect("failed to create UUri from URI");
+        let actual_segment =
+            TransportMode::uri_to_authority_topic_segment(&uuri, "local_authority");
+        assert_eq!(&actual_segment, expected_segment);
+    }
+
+    #[test_case(
+        "up://VIN.vehicles/A8000/2/8A50",
         "VIN.vehicles/A8000/2/8A50";
-        "Local uuri"
+        "Valid UUri"
+    )]
+    #[test_case(
+        "A8000/2/8A50",
+        "local_authority/A8000/2/8A50";
+        "Local UUri"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/A8000/2/8A50"),
@@ -1603,140 +1673,103 @@ mod tests {
         "VIN.vehicles/A8000/2/+";
         "Wildcard resource id"
     )]
-    fn test_uri_to_mqtt_topic_segment(uuri: &str, expected_segment: &str) {
-        let uuri = UUri::from_str(uuri).expect("expected valid UUri string.");
+    fn test_uri_to_e2e_mqtt_topic(uuri: &str, expected_topic: &str) {
+        let uuri = UUri::from_str(uuri).expect("failed to create UUri from URI");
 
-        let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClientOperations::new()),
-            subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
-            topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
-            authority_name: "VIN.vehicles".to_string(),
-            client_type: UPClientMqttType::Device,
-            free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
-            cb_message_handle: None,
-        };
-
-        let actual_segment = up_client.uri_to_mqtt_topic_segment(&uuri);
-
-        assert_eq!(&actual_segment, expected_segment);
+        let actual_segment = TransportMode::uri_to_e2e_mqtt_topic(&uuri, "local_authority");
+        assert_eq!(&actual_segment, expected_topic);
     }
 
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         None,
-        UPClientMqttType::Device,
-        "d/VIN.vehicles/A8000/2/8A50";
-        "Subscribe to a specific publish topic"
+        TransportMode::InVehicle,
+        "VIN.vehicles/A8000/2/8A50";
+        "Publish to a specific topic"
     )]
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         Some("//VIN.vehicles/B8000/3/0"),
-        UPClientMqttType::Device,
-        "d/VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0";
-        "Subscribe to a specific notification topic"
+        TransportMode::InVehicle,
+        "VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0";
+        "Send a notification"
     )]
     #[test_case(
-        "//VIN.vehicles/A8000/2/0",
-        Some("//VIN.vehicles/B8000/3/1B50"),
-        UPClientMqttType::Device,
-        "d/VIN.vehicles/A8000/2/0/VIN.vehicles/B8000/3/1B50";
-        "Request from device"
+        "/A8000/2/0",
+        Some("/B8000/3/1B50"),
+        TransportMode::InVehicle,
+        "local_authority/A8000/2/0/local_authority/B8000/3/1B50";
+        "Send a local RPC request"
     )]
     #[test_case(
         "//VIN.vehicles/B8000/3/1B50",
         Some("//VIN.vehicles/A8000/2/0"),
-        UPClientMqttType::Device,
-        "d/VIN.vehicles/B8000/3/1B50/VIN.vehicles/A8000/2/0";
-        "Response from device"
+        TransportMode::InVehicle,
+        "VIN.vehicles/B8000/3/1B50/VIN.vehicles/A8000/2/0";
+        "Send an RPC Response"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
-        Some("//VIN.vehicles/AB34/1/12CD"),
-        UPClientMqttType::Device,
-        "d/+/+/+/+/VIN.vehicles/AB34/1/12CD";
-        "Subscribe to incoming requests for a specific method"
+        Some("/AB34/1/12CD"),
+        TransportMode::InVehicle,
+        "+/+/+/+/local_authority/AB34/1/12CD";
+        "Subscribe to incoming RPC requests for a specific method"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
-        Some(&format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
-        UPClientMqttType::Cloud,
-        "c/+/+/+/+/VIN.vehicles/+/+/+";
-        "Subscribe to all incoming messages to a UAuthority in the cloud"
+        Some(&format!("//SERVICE.backend/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
+        TransportMode::OffVehicle,
+        "+/SERVICE.backend";
+        "Subscribe to all incoming messages for uEntities on a given authority in the back end"
     )]
     #[test_case(
-        &format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
+        &format!("//other_authority/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
         None,
-        UPClientMqttType::Device,
-        "d/VIN.vehicles/+/+/+";
-        "Subscribe to all publish messages from a different UAuthority"
+        TransportMode::InVehicle,
+        "other_authority/+/+/+";
+        "Subscribe to all publish messages from a different authority"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
-        Some(&format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/0")),
-        UPClientMqttType::Cloud,
-        "c/+/+/+/+/VIN.vehicles/+/+/0";
-        "Streamer subscribe to all notifications, requests and responses to its device from the cloud"
+        Some(&format!("/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
+        TransportMode::OffVehicle,
+        "+/local_authority";
+        "Streamer subscribes to all messages to its device from the cloud"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
         None,
-        UPClientMqttType::Device,
-        "d/+/+/+/+";
-        "Subscribe to all publish messages from devices"
+        TransportMode::InVehicle,
+        "+/+/+/+";
+        "Subscribe to all publish messages from devices within the vehicle"
     )]
     #[test_case(
-        &format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
+        &format!("//other_authority/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
         Some(&format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
-        UPClientMqttType::Device,
-        "d/VIN.vehicles/+/+/+/+/+/+/+";
-        "Subscribe to all message types but publish messages sent from a UAuthority"
+        TransportMode::InVehicle,
+        "other_authority/+/+/+/+/+/+/+";
+        "Subscribe to all message types but publish messages sent from a specific authority"
     )]
     fn test_to_mqtt_topic_string(
         src_uri: &str,
         sink_uri: Option<&str>,
-        client_type: UPClientMqttType,
+        mode: TransportMode,
         expected_topic: &str,
     ) {
-        let src_uri = UUri::from_str(src_uri).expect("expected valid source UUri string.");
+        let src_uri = UUri::from_str(src_uri).expect("failed to create source UUri from URI");
         let sink_uri =
-            sink_uri.map(|uri| UUri::from_str(uri).expect("expected valid sink UUri string."));
+            sink_uri.map(|uri| UUri::from_str(uri).expect("failed to create sink UUri from URI"));
 
-        let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClientOperations::new()),
-            subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
-            topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
-            authority_name: "VIN.vehicles".to_string(),
-            client_type,
-            free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
-            cb_message_handle: None,
-        };
-
-        let actual_topic = up_client.to_mqtt_topic_string(&src_uri, sink_uri.as_ref());
-
-        assert_eq!(actual_topic, expected_topic);
+        assert!(mode
+            .to_mqtt_topic(&src_uri, sink_uri.as_ref(), "local_authority")
+            .is_ok_and(|topic| topic == expected_topic));
     }
 
-    #[test_case("d/VIN.vehicles/A8000/2/8A50", "d/VIN.vehicles/A8000/2/8A50", true; "Exact match")]
-    #[test_case("d/VIN.vehicles/A8000/2/8A50", "d/+/+/+/+", true; "Wildcard pattern")]
-    #[test_case("d/VIN.vehicles/A8000/2/8A50", "d/VIN.vehicles/B8000/2/8A50", false; "Mismatched entity id")]
-    #[test_case("d/VIN.vehicles/A8000/2/8A50", "d/+/A8000/2/8A50", true; "Single wildcard matchs")]
+    #[test_case("VIN.vehicles/A8000/2/8A50", "VIN.vehicles/A8000/2/8A50", true; "Exact match")]
+    #[test_case("VIN.vehicles/A8000/2/8A50", "+/+/+/+", true; "Wildcard pattern")]
+    #[test_case("VIN.vehicles/A8000/2/8A50", "VIN.vehicles/B8000/2/8A50", false; "Mismatched entity id")]
+    #[test_case("VIN.vehicles/A8000/2/8A50", "+/A8000/2/8A50", true; "Single wildcard matchs")]
     fn test_compare_topic(topic: &str, pattern: &str, expected_result: bool) {
         assert_eq!(UPClientMqtt::compare_topic(topic, pattern), expected_result);
-    }
-
-    #[test_case(UPClientMqttType::Device, "d"; "Device indicator")]
-    #[test_case(UPClientMqttType::Cloud, "c"; "Client indicator")]
-    fn test_get_client_identifier(client_type: UPClientMqttType, expected_str: &str) {
-        let client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClientOperations::new()),
-            subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
-            topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
-            authority_name: "test".to_string(),
-            client_type,
-            free_subscription_ids: Arc::new(RwLock::new((1..3).collect())),
-            cb_message_handle: None,
-        };
-
-        assert_eq!(client.get_client_indicator(), expected_str);
     }
 }
