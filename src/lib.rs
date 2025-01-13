@@ -929,16 +929,10 @@ impl UPClientMqtt {
             &uri.authority_name
         };
 
-        let ue_service_type = if uri.has_wildcard_entity_type() {
+        let ue_id = if uri.has_wildcard_entity_type() {
             "+".into()
         } else {
-            format!("{:X}", (uri.ue_id & 0xFFFF) as u16)
-        };
-
-        let ue_service_instance = if uri.has_wildcard_entity_instance() {
-            "+".into()
-        } else {
-            format!("{:X}", (uri.ue_id >> 16) as u16)
+            format!("{:X}", uri.ue_id)
         };
 
         let ue_ver = if uri.has_wildcard_version() {
@@ -953,7 +947,7 @@ impl UPClientMqtt {
             format!("{:X}", uri.resource_id)
         };
 
-        format!("{authority}/{ue_service_type}/{ue_service_instance}/{ue_ver}/{res_id}")
+        format!("{authority}/{ue_id}/{ue_ver}/{res_id}")
     }
 
     /// Create a valid mqtt topic based on a source and sink UUri.
@@ -985,7 +979,7 @@ mod tests {
     // URI Wildcard consts
     // TODO: Remove once up-rust contains/exposes these values
     const WILDCARD_AUTHORITY: &str = "*";
-    const WILDCARD_ENTITY_ID: u32 = 0xFFFF_FFFF;
+    const WILDCARD_ENTITY_ID: u32 = 0x0000_FFFF;
     const WILDCARD_ENTITY_VERSION: u32 = 0x0000_00FF;
     const WILDCARD_RESOURCE_ID: u32 = 0x0000_FFFF;
 
@@ -1598,32 +1592,32 @@ mod tests {
 
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
-        "VIN.vehicles/8000/A/2/8A50";
+        "VIN.vehicles/A8000/2/8A50";
         "Valid uuri"
     )]
     #[test_case(
         "A8000/2/8A50",
-        "VIN.vehicles/8000/A/2/8A50";
+        "VIN.vehicles/A8000/2/8A50";
         "Local uuri"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/A8000/2/8A50"),
-        "+/8000/A/2/8A50";
+        "+/A8000/2/8A50";
         "Wildcard authority"
     )]
     #[test_case(
         &format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/2/8A50"),
-        "VIN.vehicles/+/+/2/8A50";
+        "VIN.vehicles/+/2/8A50";
         "Wildcard entity id"
     )]
     #[test_case(
         &format!("//VIN.vehicles/A8000/{WILDCARD_ENTITY_VERSION:X}/8A50"),
-        "VIN.vehicles/8000/A/+/8A50";
+        "VIN.vehicles/A8000/+/8A50";
         "Wildcard entity version"
     )]
     #[test_case(
         &format!("//VIN.vehicles/A8000/2/{WILDCARD_RESOURCE_ID:X}"),
-        "VIN.vehicles/8000/A/2/+";
+        "VIN.vehicles/A8000/2/+";
         "Wildcard resource id"
     )]
     fn test_uri_to_mqtt_topic_segment(uuri: &str, expected_segment: &str) {
@@ -1648,77 +1642,70 @@ mod tests {
         "//VIN.vehicles/A8000/2/8A50",
         None,
         UPClientMqttType::Device,
-        "d/VIN.vehicles/8000/A/2/8A50";
+        "d/VIN.vehicles/A8000/2/8A50";
         "Subscribe to a specific publish topic"
     )]
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         Some("//VIN.vehicles/B8000/3/0"),
         UPClientMqttType::Device,
-        "d/VIN.vehicles/8000/A/2/8A50/VIN.vehicles/8000/B/3/0";
+        "d/VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0";
         "Subscribe to a specific notification topic"
     )]
     #[test_case(
         "//VIN.vehicles/A8000/2/0",
         Some("//VIN.vehicles/B8000/3/1B50"),
         UPClientMqttType::Device,
-        "d/VIN.vehicles/8000/A/2/0/VIN.vehicles/8000/B/3/1B50";
+        "d/VIN.vehicles/A8000/2/0/VIN.vehicles/B8000/3/1B50";
         "Request from device"
     )]
     #[test_case(
         "//VIN.vehicles/B8000/3/1B50",
         Some("//VIN.vehicles/A8000/2/0"),
         UPClientMqttType::Device,
-        "d/VIN.vehicles/8000/B/3/1B50/VIN.vehicles/8000/A/2/0";
+        "d/VIN.vehicles/B8000/3/1B50/VIN.vehicles/A8000/2/0";
         "Response from device"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
         Some("//VIN.vehicles/AB34/1/12CD"),
         UPClientMqttType::Device,
-        "d/+/+/+/+/+/VIN.vehicles/AB34/0/1/12CD";
+        "d/+/+/+/+/VIN.vehicles/AB34/1/12CD";
         "Subscribe to incoming requests for a specific method"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
         Some(&format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
         UPClientMqttType::Cloud,
-        "c/+/+/+/+/+/VIN.vehicles/+/+/+/+";
+        "c/+/+/+/+/VIN.vehicles/+/+/+";
         "Subscribe to all incoming messages to a UAuthority in the cloud"
-    )]
-    #[test_case(
-        &format!("//{WILDCARD_AUTHORITY}/AFFFF/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
-        Some(&format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
-        UPClientMqttType::Cloud,
-        "c/+/+/A/+/+/VIN.vehicles/+/+/+/+";
-        "Subscribe to all incoming messages to a UAuthority in the cloud from a specific entity type"
     )]
     #[test_case(
         &format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
         None,
         UPClientMqttType::Device,
-        "d/VIN.vehicles/+/+/+/+";
+        "d/VIN.vehicles/+/+/+";
         "Subscribe to all publish messages from a different UAuthority"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
         Some(&format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/0")),
         UPClientMqttType::Cloud,
-        "c/+/+/+/+/+/VIN.vehicles/+/+/+/0";
+        "c/+/+/+/+/VIN.vehicles/+/+/0";
         "Streamer subscribe to all notifications, requests and responses to its device from the cloud"
     )]
     #[test_case(
         &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
         None,
         UPClientMqttType::Device,
-        "d/+/+/+/+/+";
+        "d/+/+/+/+";
         "Subscribe to all publish messages from devices"
     )]
     #[test_case(
         &format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
         Some(&format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
         UPClientMqttType::Device,
-        "d/VIN.vehicles/+/+/+/+/+/+/+/+/+";
+        "d/VIN.vehicles/+/+/+/+/+/+/+";
         "Subscribe to all message types but publish messages sent from a UAuthority"
     )]
     fn test_to_mqtt_topic_string(
@@ -1746,11 +1733,10 @@ mod tests {
         assert_eq!(actual_topic, expected_topic);
     }
 
-    #[test_case("d/VIN.vehicles/8000/A/2/8A50", "d/VIN.vehicles/8000/A/2/8A50", true; "Exact match")]
-    #[test_case("d/VIN.vehicles/8000/A/2/8A50", "d/+/+/+/+/+", true; "Wildcard pattern")]
-    #[test_case("d/VIN.vehicles/8000/A/2/8A50", "d/VIN.vehicles/8000/B/2/8A50", false; "Mismatched entity service instance")]
-    #[test_case("d/VIN.vehicles/8000/A/2/8A50", "d/VIN.vehicles/7999/A/2/8A50", false; "Mismatched entity service type")]
-    #[test_case("d/VIN.vehicles/8000/A/2/8A50", "d/+/8000/A/2/8A50", true; "Single wildcard matchs")]
+    #[test_case("d/VIN.vehicles/A8000/2/8A50", "d/VIN.vehicles/A8000/2/8A50", true; "Exact match")]
+    #[test_case("d/VIN.vehicles/A8000/2/8A50", "d/+/+/+/+", true; "Wildcard pattern")]
+    #[test_case("d/VIN.vehicles/A8000/2/8A50", "d/VIN.vehicles/B8000/2/8A50", false; "Mismatched entity id")]
+    #[test_case("d/VIN.vehicles/A8000/2/8A50", "d/+/A8000/2/8A50", true; "Single wildcard matchs")]
     fn test_compare_topic(topic: &str, pattern: &str, expected_result: bool) {
         assert_eq!(UPClientMqtt::compare_topic(topic, pattern), expected_result);
     }

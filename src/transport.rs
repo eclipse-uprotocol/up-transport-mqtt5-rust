@@ -234,14 +234,14 @@ mod tests {
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         None,
-        "d/VIN.vehicles/8000/A/2/8A50",
+        "d/VIN.vehicles/A8000/2/8A50",
         None;
         "Register listener success"
     )]
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         Some("//VIN.vehicles/B8000/3/0"),
-        "d/VIN.vehicles/8000/A/2/8A50/VIN.vehicles/8000/B/3/0",
+        "d/VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0",
         None;
         "Register listener with sink success"
     )]
@@ -293,14 +293,14 @@ mod tests {
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         None,
-        "d/VIN.vehicles/8000/A/2/8A50",
+        "d/VIN.vehicles/A8000/2/8A50",
         None;
         "Unregister listener success"
     )]
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         Some("//VIN.vehicles/B8000/3/0"),
-        "d/VIN.vehicles/8000/A/2/8A50/VIN.vehicles/8000/B/3/0",
+        "d/VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0",
         None;
         "Unregister listener with sink success"
     )]
