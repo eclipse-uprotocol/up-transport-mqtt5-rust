@@ -54,7 +54,7 @@ impl TransportMode {
         } else if uri.has_wildcard_authority() {
             MQTT_TOPIC_ANY_SEGMENT_WILDCARD.to_string()
         } else {
-            uri.authority_name.to_owned()
+            uri.authority_name()
         }
     }
 
@@ -67,25 +67,31 @@ impl TransportMode {
     fn uri_to_e2e_mqtt_topic(uri: &UUri, fallback_authority: &str) -> String {
         let authority = Self::uri_to_authority_topic_segment(uri, fallback_authority);
 
-        let ue_id = if uri.has_wildcard_entity_type() {
-            "+".into()
+        let ue_type_id = if uri.has_wildcard_entity_type() {
+            MQTT_TOPIC_ANY_SEGMENT_WILDCARD.into()
         } else {
-            format!("{:X}", uri.ue_id)
+            format!("{:X}", uri.uentity_type_id())
+        };
+
+        let ue_instance_id = if uri.has_wildcard_entity_instance() {
+            MQTT_TOPIC_ANY_SEGMENT_WILDCARD.into()
+        } else {
+            format!("{:X}", uri.uentity_instance_id())
         };
 
         let ue_ver = if uri.has_wildcard_version() {
-            "+".into()
+            MQTT_TOPIC_ANY_SEGMENT_WILDCARD.into()
         } else {
-            format!("{:X}", uri.ue_version_major)
+            format!("{:X}", uri.uentity_major_version())
         };
 
         let res_id = if uri.has_wildcard_resource_id() {
-            "+".into()
+            MQTT_TOPIC_ANY_SEGMENT_WILDCARD.into()
         } else {
-            format!("{:X}", uri.resource_id)
+            format!("{:X}", uri.resource_id())
         };
 
-        format!("{authority}/{ue_id}/{ue_ver}/{res_id}")
+        format!("{authority}/{ue_type_id}/{ue_instance_id}/{ue_ver}/{res_id}")
     }
 
     /// Creates an MQTT topic for a source and sink uProtocol URI.
@@ -1038,13 +1044,6 @@ mod tests {
 
     use super::*;
 
-    // URI Wildcard consts
-    // TODO: Remove once up-rust contains/exposes these values
-    const WILDCARD_AUTHORITY: &str = "*";
-    const WILDCARD_ENTITY_ID: u32 = 0x0000_FFFF;
-    const WILDCARD_ENTITY_VERSION: u32 = 0x0000_00FF;
-    const WILDCARD_RESOURCE_ID: u32 = 0x0000_FFFF;
-
     /// Constants defining the protobuf field numbers for UAttributes.
     pub const ID_NUM: &str = "1";
     pub const TYPE_NUM: &str = "2";
@@ -1632,8 +1631,8 @@ mod tests {
         "Local UUri"
     )]
     #[test_case(
-        &format!("//{WILDCARD_AUTHORITY}/A8000/2/8A50"),
-        MQTT_TOPIC_ANY_SEGMENT_WILDCARD;
+        "//*/A8000/2/8A50",
+        "+";
         "Wildcard authority"
     )]
     fn test_uri_to_authority_topic_segment(uri: &str, expected_segment: &str) {
@@ -1645,32 +1644,37 @@ mod tests {
 
     #[test_case(
         "up://VIN.vehicles/A8000/2/8A50",
-        "VIN.vehicles/A8000/2/8A50";
+        "VIN.vehicles/8000/A/2/8A50";
         "Valid UUri"
     )]
     #[test_case(
         "A8000/2/8A50",
-        "local_authority/A8000/2/8A50";
+        "local_authority/8000/A/2/8A50";
         "Local UUri"
     )]
     #[test_case(
-        &format!("//{WILDCARD_AUTHORITY}/A8000/2/8A50"),
-        "+/A8000/2/8A50";
+        "//*/A8000/2/8A50",
+        "+/8000/A/2/8A50";
         "Wildcard authority"
     )]
     #[test_case(
-        &format!("//VIN.vehicles/{WILDCARD_ENTITY_ID:X}/2/8A50"),
-        "VIN.vehicles/+/2/8A50";
-        "Wildcard entity id"
+        "//VIN.vehicles/FFFF/2/8A50",
+        "VIN.vehicles/+/0/2/8A50";
+        "Wildcard entity type id"
     )]
     #[test_case(
-        &format!("//VIN.vehicles/A8000/{WILDCARD_ENTITY_VERSION:X}/8A50"),
-        "VIN.vehicles/A8000/+/8A50";
+        "//VIN.vehicles/FFFF8000/2/8A50",
+        "VIN.vehicles/8000/+/2/8A50";
+        "Wildcard entity instance id"
+    )]
+    #[test_case(
+        "//VIN.vehicles/A8000/FF/8A50",
+        "VIN.vehicles/8000/A/+/8A50";
         "Wildcard entity version"
     )]
     #[test_case(
-        &format!("//VIN.vehicles/A8000/2/{WILDCARD_RESOURCE_ID:X}"),
-        "VIN.vehicles/A8000/2/+";
+        "//VIN.vehicles/A8000/2/FFFF",
+        "VIN.vehicles/8000/A/2/+";
         "Wildcard resource id"
     )]
     fn test_uri_to_e2e_mqtt_topic(uuri: &str, expected_topic: &str) {
@@ -1684,70 +1688,70 @@ mod tests {
         "//VIN.vehicles/A8000/2/8A50",
         None,
         TransportMode::InVehicle,
-        "VIN.vehicles/A8000/2/8A50";
+        "VIN.vehicles/8000/A/2/8A50";
         "Publish to a specific topic"
     )]
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         Some("//VIN.vehicles/B8000/3/0"),
         TransportMode::InVehicle,
-        "VIN.vehicles/A8000/2/8A50/VIN.vehicles/B8000/3/0";
+        "VIN.vehicles/8000/A/2/8A50/VIN.vehicles/8000/B/3/0";
         "Send a notification"
     )]
     #[test_case(
         "/A8000/2/0",
         Some("/B8000/3/1B50"),
         TransportMode::InVehicle,
-        "local_authority/A8000/2/0/local_authority/B8000/3/1B50";
+        "local_authority/8000/A/2/0/local_authority/8000/B/3/1B50";
         "Send a local RPC request"
     )]
     #[test_case(
         "//VIN.vehicles/B8000/3/1B50",
         Some("//VIN.vehicles/A8000/2/0"),
         TransportMode::InVehicle,
-        "VIN.vehicles/B8000/3/1B50/VIN.vehicles/A8000/2/0";
+        "VIN.vehicles/8000/B/3/1B50/VIN.vehicles/8000/A/2/0";
         "Send an RPC Response"
     )]
     #[test_case(
-        &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
+        "//*/FFFFFFFF/FF/FFFF",
         Some("/AB34/1/12CD"),
         TransportMode::InVehicle,
-        "+/+/+/+/local_authority/AB34/1/12CD";
+        "+/+/+/+/+/local_authority/AB34/0/1/12CD";
         "Subscribe to incoming RPC requests for a specific method"
     )]
     #[test_case(
-        &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
-        Some(&format!("//SERVICE.backend/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
+        "//*/FFFFFFFF/FF/FFFF",
+        Some("//SERVICE.backend/FFFFFFFF/FF/FFFF"),
         TransportMode::OffVehicle,
         "+/SERVICE.backend";
         "Subscribe to all incoming messages for uEntities on a given authority in the back end"
     )]
     #[test_case(
-        &format!("//other_authority/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
+        "//other_authority/FFFFFFFF/FF/FFFF",
         None,
         TransportMode::InVehicle,
-        "other_authority/+/+/+";
-        "Subscribe to all publish messages from a different authority"
+        "other_authority/+/+/+/+";
+        "Subscribe to all messages published to topics of a specific authority"
     )]
     #[test_case(
-        &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
-        Some(&format!("/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
+        "//*/FFFFFFFF/FF/FFFF",
+        Some("/FFFFFFFF/FF/FFFF"),
         TransportMode::OffVehicle,
         "+/local_authority";
-        "Streamer subscribes to all messages to its device from the cloud"
+        "Streamer subscribes to all inbound messages from the cloud"
     )]
     #[test_case(
-        &format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
+        "//*/FFFFFFFF/FF/FFFF",
         None,
         TransportMode::InVehicle,
-        "+/+/+/+";
+        "+/+/+/+/+";
         "Subscribe to all publish messages from devices within the vehicle"
     )]
     #[test_case(
-        &format!("//other_authority/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}"),
-        Some(&format!("//{WILDCARD_AUTHORITY}/{WILDCARD_ENTITY_ID:X}/{WILDCARD_ENTITY_VERSION:X}/{WILDCARD_RESOURCE_ID:X}")),
+        "//other_authority/FFFFFFFF/FF/FFFF",
+        Some("//*/FFFFFFFF/FF/FFFF"),
         TransportMode::InVehicle,
-        "other_authority/+/+/+/+/+/+/+";
+        "other_authority/+/+/+/+/+/+/+/+/+";
         "Subscribe to all message types but publish messages sent from a specific authority"
     )]
     fn test_to_mqtt_topic_string(
