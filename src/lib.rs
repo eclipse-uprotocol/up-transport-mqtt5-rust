@@ -25,17 +25,14 @@ use log::{debug, info, trace, warn};
 use paho_mqtt::{
     self as mqtt, AsyncReceiver, Message, Properties, SslOptions, MQTT_VERSION_5, QOS_1,
 };
-use protobuf::MessageDyn;
+use protobuf::{Enum, EnumOrUnknown, MessageField};
 use tokio::{sync::RwLock, task::JoinHandle};
 use up_rust::{
-    ComparableListener, UAttributes, UAttributesValidators, UCode, UMessage, UStatus, UUri, UUID,
+    ComparableListener, UAttributes, UAttributesValidators, UCode, UMessage, UMessageType,
+    UPayloadFormat, UPriority, UStatus, UUri, UUID,
 };
 
 pub mod transport;
-
-// Attribute field names
-const UURI_NAME: &str = "uuri";
-const UUID_NAME: &str = "uuid";
 
 /// Trait that allows for a mockable mqtt client.
 #[async_trait]
@@ -763,109 +760,147 @@ impl UPClientMqtt {
     ) -> Result<UAttributes, UStatus> {
         let mut attributes = UAttributes::default();
 
-        for (key, value) in props.user_iter() {
-            let protobuf_field_number: u32 = key.parse().map_err(|e| {
+        // Add the TTL UAttribute from the MessageExpiryInterval if available
+        if let Some(ttl) = props.get(paho_mqtt::PropertyCode::MessageExpiryInterval) {
+            attributes.ttl = ttl.get()
+        }
+
+        // Add UserProperty 1 to UAttributes as Message ID
+        if let Some(message_id) = props.find_user_property("1") {
+            let id = UUID::from_str(&message_id).map_err(|_| {
                 UStatus::fail_with_code(
                     UCode::INTERNAL,
-                    format!("Unable to parse attribute field number, err: {e:?}"),
+                    "Unable to map UserProperty 1 to Message ID",
+                )
+            })?;
+            attributes.id = MessageField::from(Some(id));
+        };
+
+        // Add UserProperty 2 to UAttributes as Message Type
+        if let Some(message_type_str) = props.find_user_property("2") {
+            let result = message_type_str
+                .parse::<i32>()
+                .ok()
+                .and_then(UMessageType::from_i32)
+                .map(EnumOrUnknown::from);
+
+            if let Some(message_type) = result {
+                attributes.type_ = message_type;
+            } else {
+                return Err(UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Unable to map UserProperty 2 to Message Type".to_string(),
+                ));
+            }
+        }
+
+        // Add UserProperty 3 to UAttributes as Message Source
+        if let Some(source_string) = props.find_user_property("3") {
+            let source = UUri::from_str(&source_string).map_err(|_| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Unable to map UserProperty 3 to Message Source",
+                )
+            })?;
+            attributes.source = MessageField::from(Some(source));
+        };
+
+        // Add UserProperty 4 to UAttributes as Message Sink
+        if let Some(sink_string) = props.find_user_property("4") {
+            let sink = UUri::from_str(&sink_string).map_err(|_| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Unable to map UserProperty 4 to Message Sink",
+                )
+            })?;
+            attributes.sink = MessageField::from(Some(sink));
+        };
+
+        // Add UserProperty 5 to UAttributes as Priority
+        if let Some(priority_string) = props.find_user_property("5") {
+            let result = priority_string
+                .parse::<i32>()
+                .ok()
+                .and_then(UPriority::from_i32)
+                .map(EnumOrUnknown::from);
+
+            if let Some(priority) = result {
+                attributes.priority = priority;
+            } else {
+                return Err(UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Unable to map UserProperty 2 to Message Type".to_string(),
+                ));
+            }
+        }
+
+        // Add UserProperty 7 to UAttributes as Permission Level
+        if let Some(permission_string) = props.find_user_property("7") {
+            let permission: u32 = permission_string.parse().map_err(|_| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Unable to map UserProperty 7 to Permission Level",
+                )
+            })?;
+            attributes.permission_level = Some(permission);
+        };
+
+        // Add UserProperty 8 to UAttributes as CommStatus
+        if let Some(comm_status_string) = props.find_user_property("8") {
+            let comm_status_int = comm_status_string.parse::<i32>().map_err(|_| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Unable to map UserProperty 8 to CommStatus",
                 )
             })?;
 
-            if protobuf_field_number == 0 {
-                let _attributes_version: u32 = value.parse().map_err(|e| {
-                    UStatus::fail_with_code(
-                        UCode::INTERNAL,
-                        format!("Unable to parse uAttribute version number, err: {e:?}"),
-                    )
-                })?;
+            let comm_status = UCode::from_i32(comm_status_int).ok_or_else(|| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Unable to map UserProperty 8 to CommStatus",
+                )
+            })?;
 
-                //TODO: Add version check here if needed.
-                continue;
-            }
+            attributes.commstatus = Some(EnumOrUnknown::from(comm_status));
+        }
 
-            let Some(field) = attributes
-                .descriptor_dyn()
-                .field_by_number(protobuf_field_number)
-            else {
+        // Add UserProperty 9 to UAttributes as Request ID
+        if let Some(req_id) = props.find_user_property("9") {
+            let id = UUID::from_str(&req_id).map_err(|_| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Unable to map UserProperty 9 to Request ID",
+                )
+            })?;
+            attributes.reqid = MessageField::from(Some(id));
+        };
+
+        // Add UserProperty 10 to UAttributes as Token
+        if let Some(token) = props.find_user_property("10") {
+            attributes.token = Some(token);
+        };
+
+        // Add UserProperty 11 to UAttributes as Traceparent
+        if let Some(traceparent) = props.find_user_property("11") {
+            attributes.traceparent = Some(traceparent);
+        };
+
+        // Add UserProperty 12 to UAttributes as Payload Format
+        if let Some(payload_format_string) = props.find_user_property("12") {
+            let result = payload_format_string
+                .parse::<i32>()
+                .ok()
+                .and_then(UPayloadFormat::from_i32)
+                .map(EnumOrUnknown::from);
+
+            if let Some(payload_format) = result {
+                attributes.payload_format = payload_format;
+            } else {
                 return Err(UStatus::fail_with_code(
                     UCode::INTERNAL,
-                    format!("Unable to map user property to uAttributes: {key:?} - {value:?}"),
+                    "Unable to map UserProperty 2 to Message Type".to_string(),
                 ));
-            };
-
-            // Need to get the reflect value to properly set the field.
-            let field_value = field.get_singular_field_or_default(&attributes);
-            let field_type = field_value.get_type();
-
-            let value_box = match field_type {
-                protobuf::reflect::RuntimeType::U32 => {
-                    let u32_val = value.parse::<u32>().map_err(|e| {
-                        UStatus::fail_with_code(
-                            UCode::INTERNAL,
-                            format!("Unable to parse attribute field {protobuf_field_number} to value, err: {e:?}"),
-                        )
-                    })?;
-                    Ok(protobuf::reflect::ReflectValueBox::U32(u32_val))
-                }
-                protobuf::reflect::RuntimeType::String => {
-                    Ok(protobuf::reflect::ReflectValueBox::String(value))
-                }
-                protobuf::reflect::RuntimeType::Enum(descriptor) => {
-                    let enum_val = value.parse::<i32>().map_err(|e| {
-                        UStatus::fail_with_code(
-                            UCode::INTERNAL,
-                            format!("Unable to parse attribute field {protobuf_field_number} to enum, err: {e:?}"),
-                        )
-                    })?;
-                    Ok(protobuf::reflect::ReflectValueBox::Enum(
-                        descriptor.clone(),
-                        enum_val,
-                    ))
-                }
-                protobuf::reflect::RuntimeType::Message(descriptor) => {
-                    // Get type name of message to use for downcasting.
-                    let message_type_name: &str = &descriptor.name().to_ascii_lowercase();
-
-                    // If field value can be unwrapped as a MessageRef, process the field value.
-                    // Currently only set up to process `UUID` and `UURI` types. Add more as needed.
-                    match message_type_name {
-                        UUID_NAME => {
-                            let uuid = UUID::from_str(&value).map_err(|e| {
-                                UStatus::fail_with_code(
-                                    UCode::INTERNAL,
-                                    format!("Unable to parse attribute field {protobuf_field_number} to uuid message, err: {e:?}"),
-                                )
-                            })?;
-                            Ok(protobuf::reflect::ReflectValueBox::Message(Box::new(uuid)))
-                        }
-                        UURI_NAME => {
-                            let uuri = UUri::from_str(&value).map_err(|e| {
-                                UStatus::fail_with_code(
-                                    UCode::INTERNAL,
-                                    format!("Unable to parse attribute field {protobuf_field_number} to uuri message, err: {e:?}"),
-                                )
-                            })?;
-                            Ok(protobuf::reflect::ReflectValueBox::Message(Box::new(uuri)))
-                        }
-                        _ => Err(UStatus::fail_with_code(
-                            UCode::INTERNAL,
-                            format!(
-                                "Unsupported message type for field {protobuf_field_number}: {}",
-                                message_type_name
-                            ),
-                        )),
-                    }
-                }
-                _ => Err(UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!(
-                        "Unsupported protobuf field type for field {protobuf_field_number}: {}",
-                        field_type
-                    ),
-                )),
-            }?;
-
-            field.set_singular_field(&mut attributes, value_box)
+            }
         }
 
         // Validate the reconstructed attributes
@@ -960,7 +995,6 @@ mod tests {
     pub const SOURCE_NUM: &str = "3";
     pub const SINK_NUM: &str = "4";
     pub const PRIORITY_NUM: &str = "5";
-    pub const TTL_NUM: &str = "6";
     pub const PERM_LEVEL_NUM: &str = "7";
     pub const COMMSTATUS_NUM: &str = "8";
     pub const REQID_NUM: &str = "9";
@@ -1145,6 +1179,16 @@ mod tests {
     ) -> mqtt::Properties {
         let mut properties = mqtt::Properties::new();
 
+        // Add TTL as MQTT MessageExpiryInterval
+        if let Some(message_expiry_interval) = ttl {
+            properties
+                .push_u32(
+                    mqtt::PropertyCode::MessageExpiryInterval,
+                    message_expiry_interval,
+                )
+                .unwrap();
+        }
+
         // Add uAttributes version number.
         properties
             .push_string_pair(mqtt::PropertyCode::UserProperty, "0", "1")
@@ -1159,6 +1203,8 @@ mod tests {
                 )
                 .unwrap();
         }
+
+        // Add the remaining attributes as MQTT UserProperties
         if let Some(type_val) = type_ {
             properties
                 .push_string_pair(
@@ -1184,15 +1230,6 @@ mod tests {
                     mqtt::PropertyCode::UserProperty,
                     PRIORITY_NUM,
                     &priority_val.value().to_string(),
-                )
-                .unwrap();
-        }
-        if let Some(ttl_val) = ttl {
-            properties
-                .push_string_pair(
-                    mqtt::PropertyCode::UserProperty,
-                    TTL_NUM,
-                    &ttl_val.to_string(),
                 )
                 .unwrap();
         }
@@ -1479,7 +1516,6 @@ mod tests {
             assert_eq!(constructed_props.len(), expected_attributes_num);
             // Iterate over all created properties and compare with the expected properties
             constructed_props.user_iter().for_each(|(key, value)| {
-                println!("{}", key);
                 let expected_prop = properties.find_user_property(&key);
                 assert_eq!(Some(value), expected_prop);
             });
