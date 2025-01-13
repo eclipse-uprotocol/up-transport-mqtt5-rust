@@ -48,6 +48,7 @@ pub enum TransportMode {
 
 impl TransportMode {
     /// Creates an MQTT topic segment from the authority name of a uProtocol URI.
+    // [impl->dsn~up-transport-mqtt5-d2d-topic-names~1]
     fn uri_to_authority_topic_segment(uri: &UUri, fallback_authority: &str) -> String {
         if uri.has_empty_authority() {
             fallback_authority.to_owned()
@@ -64,6 +65,7 @@ impl TransportMode {
     ///
     /// * `fallback_authority` - The authority name to use if the given URI does not contain an authority.
     /// * `uri` - The URI to convert.
+    // [impl->dsn~up-transport-mqtt5-e2e-topic-names~1]
     fn uri_to_e2e_mqtt_topic(uri: &UUri, fallback_authority: &str) -> String {
         let authority = Self::uri_to_authority_topic_segment(uri, fallback_authority);
 
@@ -107,6 +109,7 @@ impl TransportMode {
         fallback_authority: &str,
     ) -> Result<String, UUriError> {
         match self {
+            // [impl->dsn~up-transport-mqtt5-e2e-topic-names~1]
             TransportMode::InVehicle => {
                 let mut topic = String::new();
                 topic.push_str(&Self::uri_to_e2e_mqtt_topic(source, fallback_authority));
@@ -116,6 +119,7 @@ impl TransportMode {
                 }
                 Ok(topic)
             }
+            // [impl->dsn~up-transport-mqtt5-d2d-topic-names~1]
             TransportMode::OffVehicle => {
                 if let Some(uri) = sink {
                     let mut topic = String::new();
@@ -597,6 +601,7 @@ impl UPClientMqtt {
             .qos(QOS_1); // QOS 1 - Delivered and received at least once
 
         // If there is payload to send, add it to the message.
+        // [impl->dsn~up-transport-mqtt5-payload-mapping~1]
         if let Some(data) = payload {
             msg_builder = msg_builder.payload(data);
         }
@@ -1635,6 +1640,7 @@ mod tests {
         "+";
         "Wildcard authority"
     )]
+    // [utest->dsn~up-transport-mqtt5-d2d-topic-names~1]
     fn test_uri_to_authority_topic_segment(uri: &str, expected_segment: &str) {
         let uuri = UUri::from_str(uri).expect("failed to create UUri from URI");
         let actual_segment =
@@ -1677,6 +1683,7 @@ mod tests {
         "VIN.vehicles/8000/A/2/+";
         "Wildcard resource id"
     )]
+    // [utest->dsn~up-transport-mqtt5-e2e-topic-names~1]
     fn test_uri_to_e2e_mqtt_topic(uuri: &str, expected_topic: &str) {
         let uuri = UUri::from_str(uuri).expect("failed to create UUri from URI");
 
@@ -1754,6 +1761,8 @@ mod tests {
         "other_authority/+/+/+/+/+/+/+/+/+";
         "Subscribe to all message types but publish messages sent from a specific authority"
     )]
+    // [utest->dsn~up-transport-mqtt5-e2e-topic-names~1]
+    // [utest->dsn~up-transport-mqtt5-d2d-topic-names~1]
     fn test_to_mqtt_topic_string(
         src_uri: &str,
         sink_uri: Option<&str>,

@@ -8,15 +8,15 @@ mod common;
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "should only be executed with an MQTT broker running"]
 async fn test_publish_and_subscribe() {
+    let payload = "test_payload";
+    let expected_payload = payload.to_owned();
     let message_received = Arc::new(Notify::new());
     let message_received_clone = message_received.clone();
     let mut listener = MockUListener::new();
-    listener
-        .expect_on_receive()
-        .once()
-        .return_once(move |_msg| {
-            message_received_clone.notify_one();
-        });
+    listener.expect_on_receive().once().return_once(move |msg| {
+        assert_eq!(msg.payload, Some(expected_payload.into()));
+        message_received_clone.notify_one();
+    });
 
     let subscriber = common::create_up_transport_mqtt("Subscriber")
         .await
@@ -32,9 +32,11 @@ async fn test_publish_and_subscribe() {
         .await
         .expect("failed to create transport at sending end");
     let source = UUri::from_str("//Publisher/A8000/2/8A50").unwrap();
-    let umessage = UMessageBuilder::publish(source).build().unwrap();
+    let message_to_send = UMessageBuilder::publish(source)
+        .build_with_payload(payload, up_rust::UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
+        .unwrap();
     publisher
-        .send(umessage)
+        .send(message_to_send)
         .await
         .expect("failed to publish message");
 

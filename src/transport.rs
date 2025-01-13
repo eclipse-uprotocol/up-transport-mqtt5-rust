@@ -33,11 +33,14 @@ impl UTransport for UPClientMqtt {
             UCode::INVALID_ARGUMENT,
             "Invalid source: expected a source value, none was found",
         ))?;
+        // [impl->dsn~up-transport-mqtt5-e2e-topic-names~1]
+        // [impl->dsn~up-transport-mqtt5-d2d-topic-names~1]
         let topic = self
             .to_mqtt_topic_string(src_uri, attributes.sink.as_ref())
             .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
 
         // Extract payload from umessage to send
+        // [impl->dsn~up-transport-mqtt5-payload-mapping~1]
         let payload = message.payload;
 
         self.send_message(&topic, attributes, payload).await
@@ -103,7 +106,7 @@ mod tests {
                     UUri::from_str(sink.expect("Expected a sink value for request message"))
                         .expect("Expected a valid sink value");
 
-                UMessageBuilder::request(source_uri, sink_uri, 3600)
+                UMessageBuilder::request(sink_uri, source_uri, 3600)
                     .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
                     .unwrap()
             }
@@ -112,7 +115,7 @@ mod tests {
                     UUri::from_str(sink.expect("Expected a sink value for request message"))
                         .expect("Expected a valid sink value");
 
-                UMessageBuilder::response(source_uri, UUID::build(), sink_uri)
+                UMessageBuilder::response(sink_uri, UUID::build(), source_uri)
                     .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
                     .unwrap()
             }
@@ -134,6 +137,7 @@ mod tests {
         "//VIN.vehicles/A8000/2/8A50",
         None,
         "payload",
+        "VIN.vehicles/8000/A/2/8A50",
         None;
         "Publish success"
     )]
@@ -142,22 +146,25 @@ mod tests {
         "/A8000/2/1A50",
         Some("//VIN.vehicles/B8000/3/0"),
         "payload",
+        "VIN.vehicles/8000/A/2/1A50/VIN.vehicles/8000/B/3/0",
         None;
         "Notification success"
     )]
     #[test_case(
         UMessageType::UMESSAGE_TYPE_REQUEST,
-        "//VIN.vehicles/A8000/2/1B50",
-        Some("//VIN.vehicles/B8000/3/0"),
+        "//VIN.vehicles/A8000/2/0",
+        Some("//VIN.vehicles/B8000/3/10AB"),
         "payload",
+        "VIN.vehicles/8000/A/2/0/VIN.vehicles/8000/B/3/10AB",
         None;
         "Request success"
     )]
     #[test_case(
         UMessageType::UMESSAGE_TYPE_RESPONSE,
-        "//VIN.vehicles/B8000/3/0",
-        Some("//VIN.vehicles/A8000/2/1B50"),
+        "//VIN.vehicles/B8000/3/10AB",
+        Some("//VIN.vehicles/A8000/2/0"),
         "payload",
+        "VIN.vehicles/8000/B/3/10AB/VIN.vehicles/8000/A/2/0",
         None;
         "Response success"
     )]
@@ -167,13 +174,20 @@ mod tests {
         source: &str,
         sink: Option<&str>,
         payload: &str,
+        expected_topic: &str,
         expected_error_code: Option<UCode>,
     ) {
+        let expected_payload = payload.to_string();
+        let owned_topic = expected_topic.to_string();
         let mut client_operations = MockMqttClientOperations::new();
         client_operations
             .expect_publish()
             .once()
-            .return_once(move |_msg| {
+            .return_once(move |msg| {
+                // [utest->dsn~up-transport-mqtt5-e2e-topic-names~1]
+                assert_eq!(msg.topic(), owned_topic);
+                // [utest->dsn~up-transport-mqtt5-payload-mapping~1]
+                assert_eq!(msg.payload(), expected_payload.as_bytes());
                 expected_error_code.map_or(Ok(()), |code| {
                     Err(UStatus::fail_with_code(code, "failed to send message"))
                 })
@@ -188,8 +202,8 @@ mod tests {
             cb_message_handle: None,
         };
 
-        let message = create_test_message(message_type, source, sink, payload.to_string());
-        let send_result = client.send(message).await;
+        let message_to_send = create_test_message(message_type, source, sink, payload.to_string());
+        let send_result = client.send(message_to_send).await;
 
         if let Some(error_code) = expected_error_code {
             assert!(send_result.is_err_and(|err| err.get_code() == error_code));
@@ -220,9 +234,12 @@ mod tests {
         expected_error_code: Option<UCode>,
     ) {
         let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
+        let expected_topic_filter = expected_topic.to_string();
         let mut client_operations = MockMqttClientOperations::new();
         client_operations.expect_subscribe().once().return_once(
-            move |_topic_filter, _subscription_id| {
+            move |topic_filter, _subscription_id| {
+                // [utest->dsn~up-transport-mqtt5-e2e-topic-names~1]
+                assert_eq!(topic_filter, expected_topic_filter);
                 expected_error_code.map_or(Ok(()), |code| {
                     Err(UStatus::fail_with_code(code, "failed to send message"))
                 })
@@ -286,11 +303,14 @@ mod tests {
         expected_error_code: Option<UCode>,
     ) {
         let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
+        let expected_topic_filter = expected_topic.to_string();
         let mut client_operations = MockMqttClientOperations::new();
         client_operations
             .expect_unsubscribe()
             .once()
-            .return_once(move |_topic_filter| {
+            .return_once(move |topic_filter| {
+                // [utest->dsn~up-transport-mqtt5-e2e-topic-names~1]
+                assert_eq!(topic_filter, expected_topic_filter);
                 expected_error_code.map_or(Ok(()), |code| {
                     Err(UStatus::fail_with_code(code, "failed to send message"))
                 })
