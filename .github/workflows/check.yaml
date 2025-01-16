@@ -57,7 +57,7 @@ jobs:
         toolchain: ${{ env.RUST_TOOLCHAIN }}
     - name: Run cargo check
       run: |
-        cargo check --all --tests
+        cargo check --workspace --all-targets --all-features
 
   fmt:
     runs-on: ubuntu-latest
@@ -71,7 +71,7 @@ jobs:
           components: rustfmt
       - name: Run cargo fmt
         run: |
-          cargo fmt --all -- --check
+          cargo fmt --all --check
 
   clippy:
     runs-on: ubuntu-latest
@@ -86,7 +86,7 @@ jobs:
       - name: Run cargo clippy
         run: |
           cargo clippy --version
-          cargo clippy --tests --examples
+          cargo clippy --all-targets --all-features --no-deps -- -W warnings -D warnings
 
   docu:
     runs-on: ubuntu-latest
