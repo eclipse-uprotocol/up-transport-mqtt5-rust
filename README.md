@@ -1,7 +1,5 @@
 # Eclipse uProtocol MQTT 5 Transport Library for Rust
 
-## Overview
-
 This library provides a Rust based implementation of the [MQTT 5 uProtocol Transport v1.6.0-alpha.4](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.4/up-l1/mqtt_5.adoc).
 
 ## Getting Started
@@ -58,10 +56,22 @@ cargo run --example publisher_example
 
 ### Using the Library
 
+Most developers will want to create an instance of the *Mqtt5Transport* struct and use it with the Communication Level API and its default implementation
+which are provided by the *up-rust* library.
+
+The libraries need to be added to the `[dependencies]` section of the `Cargo.toml` file:
+
+```toml
+[dependencies]
+up-rust = { version = "0.4" }
+up-transport-mqtt5 = { version = "0.2" }
+```
+
+Please refer to the [publisher_example](/examples/publisher_example.rs) and [subscriber_example](/examples/subscriber_example.rs) to see how to initialize and use the transport.
+
 The library contains the following modules:
 
 | Module    | uProtocol Specification                                                                                 | Purpose                                                                                                   |
 | --------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | transport | [uP-L1 Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/main/up-l1/README.adoc) | Implementation of MQTT5 uTransport client used for bidirectional point-2-point communication between uEs. |
 
-Please refer to the [publisher_example](/examples/publisher_example.rs) and [subscriber_example](/examples/subscriber_example.rs) to see how to initialize and use the transport.
