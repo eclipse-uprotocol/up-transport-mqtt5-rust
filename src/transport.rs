@@ -17,10 +17,10 @@ use async_trait::async_trait;
 
 use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
 
-use crate::UPClientMqtt;
+use crate::Mqtt5Transport;
 
 #[async_trait]
-impl UTransport for UPClientMqtt {
+impl UTransport for Mqtt5Transport {
     async fn send(&self, message: UMessage) -> Result<(), UStatus> {
         // validate message
         let attributes = message.attributes.as_ref().ok_or(UStatus::fail_with_code(
@@ -84,7 +84,7 @@ mod tests {
     use test_case::test_case;
     use tokio::sync::RwLock;
 
-    use crate::{MockMqttClientOperations, TransportMode};
+    use crate::{mqtt_client::MockMqttClientOperations, TransportMode};
 
     use super::*;
 
@@ -192,14 +192,14 @@ mod tests {
                     Err(UStatus::fail_with_code(code, "failed to send message"))
                 })
             });
-        let client = UPClientMqtt {
-            mqtt_client: Arc::new(client_operations),
+        let client = Mqtt5Transport {
+            mqtt_client: Box::new(client_operations),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
-            cb_message_handle: None,
+            message_callback_handle: None,
         };
 
         let message_to_send = create_test_message(message_type, source, sink, payload.to_string());
@@ -246,14 +246,14 @@ mod tests {
             },
         );
 
-        let client = UPClientMqtt {
-            mqtt_client: Arc::new(client_operations),
+        let client = Mqtt5Transport {
+            mqtt_client: Box::new(client_operations),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map,
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
-            cb_message_handle: None,
+            message_callback_handle: None,
         };
 
         let listener = Arc::new(MockUListener::new());
@@ -324,14 +324,14 @@ mod tests {
             [comparable_listener.clone()].iter().cloned().collect(),
         );
 
-        let client = UPClientMqtt {
-            mqtt_client: Arc::new(client_operations),
+        let client = Mqtt5Transport {
+            mqtt_client: Box::new(client_operations),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map,
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
-            cb_message_handle: None,
+            message_callback_handle: None,
         };
 
         let source_uri = UUri::from_str(source_filter).expect("Expected a valid source value");

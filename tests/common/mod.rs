@@ -1,25 +1,19 @@
-use up_rust::{UStatus, UUID};
-use up_transport_mqtt5::{MqttConfig, MqttProtocol, TransportMode, UPClientMqtt};
+use up_rust::UStatus;
+use up_transport_mqtt5::{Mqtt5Transport, MqttClientOptions, TransportMode};
 
 pub async fn create_up_transport_mqtt<S: Into<String>>(
     authority_name: S,
-) -> Result<UPClientMqtt, UStatus> {
-    let config = MqttConfig {
-        mqtt_protocol: MqttProtocol::Mqtt,
-        mqtt_hostname: "localhost".to_string(),
-        mqtt_port: 1883,
+) -> Result<Mqtt5Transport, UStatus> {
+    let config = MqttClientOptions {
+        client_id: None,
+        broker_uri: "mqtt://localhost:1883".to_string(),
         max_buffered_messages: 100,
         max_subscriptions: 100,
         session_expiry_interval: 3600,
         ssl_options: None,
-        username: "testuser".to_string(),
+        username: None,
+        password: None,
     };
 
-    UPClientMqtt::new(
-        TransportMode::InVehicle,
-        config,
-        UUID::build(),
-        authority_name.into(),
-    )
-    .await
+    Mqtt5Transport::new(TransportMode::InVehicle, config, authority_name.into()).await
 }

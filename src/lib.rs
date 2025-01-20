@@ -18,13 +18,12 @@ use std::{
 };
 
 use async_channel::Receiver;
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::StreamExt;
-use log::{debug, info, trace, warn};
-use paho_mqtt::{
-    self as mqtt, AsyncReceiver, Message, Properties, SslOptions, MQTT_VERSION_5, QOS_1,
-};
+use log::{debug, trace};
+use mqtt_client::MqttClientOperations;
+pub use mqtt_client::{MqttClientOptions, SslOptions};
+use paho_mqtt::{self as mqtt, Message, QOS_1};
 use protobuf::{Enum, EnumOrUnknown, MessageField};
 use tokio::{sync::RwLock, task::JoinHandle};
 use up_rust::{
@@ -32,9 +31,12 @@ use up_rust::{
     UPayloadFormat, UPriority, UStatus, UUri, UUriError, UUID,
 };
 
-pub mod transport;
+mod mqtt_client;
+mod transport;
 
 const MQTT_TOPIC_ANY_SEGMENT_WILDCARD: &str = "+";
+
+type SubscriptionIdentifier = u16;
 
 /// The transport's mode of operation.
 pub enum TransportMode {
@@ -143,240 +145,12 @@ impl TransportMode {
     }
 }
 
-/// Trait that allows for a mockable mqtt client.
-#[cfg_attr(test, mockall::automock)]
-#[async_trait]
-pub trait MqttClientOperations: Sync + Send {
-    /// Create a new MockableMqttClient.
-    ///
-    /// # Arguments
-    /// * `config` - Configuration for the mqtt client.
-    /// * `client_id` - Client id for the mqtt client.
-    async fn new_client(
-        config: MqttConfig,
-        client_id: UUID,
-    ) -> Result<(Self, AsyncReceiver<Option<Message>>), UStatus>
-    where
-        Self: Sized;
-
-    /// Publish an mqtt message to the mqtt broker.
-    ///
-    /// # Arguments
-    /// * `topic` - Topic to subscribe to.
-    async fn publish(&self, mqtt_message: mqtt::Message) -> Result<(), UStatus>;
-
-    /// Subscribe the mqtt client to a topic.
-    ///
-    /// # Arguments
-    /// * `topic` - Topic to subscribe to.
-    /// * `id` - Subscription ID for the topic, used to prevent duplication.
-    async fn subscribe(&self, topic: &str, id: i32) -> Result<(), UStatus>;
-
-    /// Unsubscribe the mqtt client to a topic.
-    ///
-    /// # Arguments
-    /// * `topic` - Topic to subscribe to.
-    async fn unsubscribe(&self, topic: &str) -> Result<(), UStatus>;
-}
-
-pub struct AsyncMqttClient {
-    inner_mqtt_client: Arc<mqtt::AsyncClient>,
-    sub_identifier_available: bool,
-}
-
-fn check_subscription_identifier_available_in_response(props: &Properties) -> bool {
-    let property = props.get(paho_mqtt::PropertyCode::SubscriptionIdentifiersAvailable);
-    if let Some(property) = property {
-        let property_value = property.get_byte();
-        if let Some(value) = property_value {
-            if value != 1 {
-                debug!("Subscription Identifier not supported by broker");
-                return false;
-            }
-        }
-    }
-    debug!("Subscription Identifier supported by broker");
-    true
-}
-
-// Create a set of poperties with a single Subscription ID
-fn sub_id(id: i32) -> mqtt::Properties {
-    mqtt::properties![
-        mqtt::PropertyCode::SubscriptionIdentifier => id
-    ]
-}
-
-// Push a user property from UAttributes to the MQTT Properties
-fn push_user_property(
-    properties: &mut mqtt::Properties,
-    code: &str,
-    value: &str,
-    error_message: &str,
-) -> Result<(), UStatus> {
-    properties
-        .push_string_pair(mqtt::PropertyCode::UserProperty, code, value)
-        .map_err(|e| {
-            UStatus::fail_with_code(UCode::INTERNAL, format!("{error_message}, err: {e:?}"))
-        })
-}
-
-#[async_trait]
-impl MqttClientOperations for AsyncMqttClient {
-    /// Create a new MockableMqttClient.
-    ///
-    /// # Arguments
-    /// * `config` - Configuration for the mqtt client.
-    /// * `client_id` - Client id for the mqtt client.
-    async fn new_client(
-        config: MqttConfig,
-        client_id: UUID,
-    ) -> Result<(Self, AsyncReceiver<Option<Message>>), UStatus>
-    where
-        Self: Sized,
-    {
-        let mqtt_protocol = match config.mqtt_protocol {
-            MqttProtocol::Mqtt => "mqtt",
-            MqttProtocol::Mqtts => "mqtts",
-        };
-
-        let mqtt_uri = format!(
-            "{}://{}:{}",
-            mqtt_protocol, config.mqtt_hostname, config.mqtt_port
-        );
-
-        let mut mqtt_cli = mqtt::CreateOptionsBuilder::new()
-            .server_uri(mqtt_uri)
-            .client_id(client_id)
-            .max_buffered_messages(config.max_buffered_messages)
-            .create_client()
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to create mqtt client: {e:?}"),
-                )
-            })?;
-
-        let message_stream = mqtt_cli.get_stream(100);
-
-        let conn_opts =
-            mqtt::ConnectOptionsBuilder::with_mqtt_version(MQTT_VERSION_5)
-            .clean_start(false)
-            .properties(mqtt::properties![mqtt::PropertyCode::SessionExpiryInterval => config.session_expiry_interval])
-            .ssl_options(config.ssl_options.or_else(|| Some(SslOptions::default())).unwrap())
-            .user_name(config.username)
-            .finalize();
-
-        let token = mqtt_cli.connect(conn_opts).await.map_err(|e| {
-            UStatus::fail_with_code(
-                UCode::INTERNAL,
-                format!("Unable to connect to mqtt broker: {e:?}"),
-            )
-        })?;
-
-        let sub_identifier_available =
-            check_subscription_identifier_available_in_response(token.properties());
-
-        Ok((
-            Self {
-                inner_mqtt_client: Arc::new(mqtt_cli),
-                sub_identifier_available,
-            },
-            message_stream,
-        ))
-    }
-
-    /// Publish an mqtt message to the mqtt broker.
-    ///
-    /// # Arguments
-    /// * `topic` - Topic to subscribe to.
-    async fn publish(&self, mqtt_message: mqtt::Message) -> Result<(), UStatus> {
-        self.inner_mqtt_client
-            .publish(mqtt_message)
-            .await
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to publish message: {e:?}"),
-                )
-            })?;
-
-        Ok(())
-    }
-
-    /// Subscribe the mqtt client to a topic.
-    ///
-    /// # Arguments
-    /// * `topic` - Topic to subscribe to.
-    async fn subscribe(&self, topic: &str, id: i32) -> Result<(), UStatus> {
-        // QOS 1 - Delivered and received at least once
-        let sub_id_prop = if self.sub_identifier_available {
-            debug!(
-                "Subcription identifier supported by broker. Subscribe with subscription id {}",
-                id
-            );
-            Some(sub_id(id))
-        } else {
-            None
-        };
-
-        self.inner_mqtt_client
-            .subscribe_with_options(topic, QOS_1, None, sub_id_prop)
-            .await
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to subscribe to topic: {e:?}"),
-                )
-            })?;
-
-        Ok(())
-    }
-
-    /// Unsubscribe the mqtt client to a topic.
-    ///
-    /// # Arguments
-    /// * `topic` - Topic to subscribe to.
-    async fn unsubscribe(&self, topic: &str) -> Result<(), UStatus> {
-        self.inner_mqtt_client
-            .unsubscribe(topic)
-            .await
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to unsubscribe from topic: {e:?}"),
-                )
-            })?;
-
-        Ok(())
-    }
-}
-
-/// Configuration for the mqtt client.
-pub struct MqttConfig {
-    /// Schema of the mqtt broker (mqtt or mqtts)
-    pub mqtt_protocol: MqttProtocol,
-    /// Port of the mqtt broker to connect to.
-    pub mqtt_port: u16,
-    /// Hostname of the mqtt broker.
-    pub mqtt_hostname: String,
-    /// Max buffered messages for the mqtt client.
-    pub max_buffered_messages: i32,
-    /// Max subscriptions for the mqtt client.
-    pub max_subscriptions: i32,
-    /// Session Expiry Interval for the mqtt client.
-    pub session_expiry_interval: i32,
-    /// Optional SSL options for the mqtt connection.
-    pub ssl_options: Option<mqtt::SslOptions>,
-    /// Username
-    pub username: String,
-}
-
-/// UP Client for mqtt.
-pub struct UPClientMqtt {
+/// An MQTT 5 based uProtocol transport implementation.
+pub struct Mqtt5Transport {
     /// Client instance for connecting to mqtt broker.
-    mqtt_client: Arc<dyn MqttClientOperations>,
+    mqtt_client: Box<dyn MqttClientOperations>,
     /// Map of subscription identifiers to subscribed topics.
-    subscription_topic_map: Arc<RwLock<HashMap<i32, String>>>,
+    subscription_topic_map: Arc<RwLock<HashMap<SubscriptionIdentifier, String>>>,
     /// Map of topics to listeners.
     topic_listener_map: Arc<RwLock<HashMap<String, HashSet<ComparableListener>>>>,
     /// My authority
@@ -384,75 +158,68 @@ pub struct UPClientMqtt {
     /// The transport's mode of operation.
     mode: TransportMode,
     /// List of free subscription identifiers to use for the client subscriptions.
-    free_subscription_ids: Arc<RwLock<HashSet<i32>>>,
+    free_subscription_ids: Arc<RwLock<HashSet<SubscriptionIdentifier>>>,
     /// Handle to the message callback.
-    cb_message_handle: Option<JoinHandle<()>>,
+    message_callback_handle: Option<JoinHandle<()>>,
 }
 
-/// Type of MQTT protocol
-pub enum MqttProtocol {
-    Mqtt,
-    Mqtts,
-}
-
-impl UPClientMqtt {
-    /// Create a new UPClientMqtt.
+impl Mqtt5Transport {
+    /// Creates a new transport.
     ///
     /// # Arguments
     /// * `mode` - The transport's mode of operation.
-    /// * `config` - Configuration for the mqtt client.
-    /// * `client_id` - Client id for the mqtt client.
-    /// * `authority_name` - Authority name for the mqtt client.
+    /// * `options` - Configuration options for connecting to the MQTT broker.
+    /// * `authority_name` - Authority name of the local uEntity.
     pub async fn new(
         mode: TransportMode,
-        config: MqttConfig,
-        client_id: UUID,
+        options: MqttClientOptions,
         authority_name: String,
     ) -> Result<Self, UStatus> {
         let subscription_topic_map = Arc::new(RwLock::new(HashMap::new()));
         let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
         let free_subscription_ids =
-            Arc::new(RwLock::new((1..config.max_subscriptions + 1).collect()));
+            Arc::new(RwLock::new((1..(options.max_subscriptions) + 1).collect()));
 
         let subscription_topic_map_handle = subscription_topic_map.clone();
         let topic_listener_map_handle = topic_listener_map.clone();
 
-        // Create the mqtt client instance.
-        let (mqtt_client, message_stream) = AsyncMqttClient::new_client(config, client_id).await?;
+        // Create the MQTT client
+        let mut client_operations =
+            mqtt_client::PahoBasedMqttClientOperations::new_client(&options)?;
 
-        // Create the callback message handler.
-        let cb_message_handle = Some(Self::create_cb_message_handler(
+        // Create the callback for processing messages received from the broker
+        let message_callback_handle = Some(Self::create_cb_message_handler(
             subscription_topic_map_handle,
             topic_listener_map_handle,
-            message_stream,
+            client_operations.get_message_stream(),
         ));
 
-        Ok(Self {
-            mqtt_client: Arc::new(mqtt_client),
+        client_operations.connect(&options).await.map(|_| Self {
+            mqtt_client: Box::new(client_operations),
             subscription_topic_map,
             topic_listener_map,
             authority_name,
             mode,
             free_subscription_ids,
-            cb_message_handle,
+            message_callback_handle,
         })
     }
 
-    /// On exit, cleanup the callback message thread.
-    pub fn cleanup(&self) {
-        if let Some(cb_message_handle) = &self.cb_message_handle {
+    /// Stops processing of incoming messages.
+    pub fn shutdown(&self) {
+        if let Some(cb_message_handle) = self.message_callback_handle.as_ref() {
             cb_message_handle.abort();
         }
     }
 
-    // Creates a callback message handler that listens for incoming messages and notifies listeners asyncronously.
+    // Creates a callback message handler that listens for incoming messages and notifies listeners asynchronously.
     //
     // # Arguments
     // * `subscription_map` - Map of subscription identifiers to subscribed topics.
     // * `topic_map` - Map of topics to listeners.
     // * `message_stream` - Stream of incoming mqtt messages.
     fn create_cb_message_handler(
-        subscription_map: Arc<RwLock<HashMap<i32, String>>>,
+        subscription_map: Arc<RwLock<HashMap<SubscriptionIdentifier, String>>>,
         topic_map: Arc<RwLock<HashMap<String, HashSet<ComparableListener>>>>,
         mut message_stream: Receiver<Option<Message>>,
     ) -> JoinHandle<()> {
@@ -466,17 +233,18 @@ impl UPClientMqtt {
                 let topic = msg.topic();
                 let sub_id = msg
                     .properties()
-                    .get_int(mqtt::PropertyCode::SubscriptionIdentifier);
+                    .get_int(paho_mqtt::PropertyCode::SubscriptionIdentifier)
+                    .and_then(|v| SubscriptionIdentifier::try_from(v).ok());
 
                 // Get attributes from mqtt header.
                 let umessage = if msg.properties().is_empty() {
                     protobuf::Message::parse_from_bytes(msg.payload()).unwrap()
                 } else {
                     let uattributes = {
-                        match UPClientMqtt::get_uattributes_from_mqtt_properties(msg.properties()) {
+                        match get_uattributes_from_mqtt_properties(msg.properties()) {
                             Ok(uattributes) => uattributes,
                             Err(e) => {
-                                warn!("Unable to get UAttributes from mqtt properties: {}", e);
+                                debug!("Unable to get UAttributes from NQTT properties: {}", e);
                                 continue;
                             }
                         }
@@ -521,7 +289,7 @@ impl UPClientMqtt {
 
                         topic_map_read
                             .iter()
-                            .filter(|(key, _)| UPClientMqtt::compare_topic(topic, key))
+                            .filter(|(key, _)| Mqtt5Transport::compare_topic(topic, key))
                             .flat_map(|(_topic, listener)| listener.to_owned())
                             .collect()
                     };
@@ -557,7 +325,7 @@ impl UPClientMqtt {
     }
 
     /// Get an available subscription id to use.
-    async fn get_free_subscription_id(&self) -> Result<i32, UStatus> {
+    async fn get_free_subscription_id(&self) -> Result<SubscriptionIdentifier, UStatus> {
         // Get a random subscription id from the free subscription ids.
         let mut free_ids = self.free_subscription_ids.write().await;
         if let Some(&id) = free_ids.iter().next() {
@@ -575,7 +343,7 @@ impl UPClientMqtt {
     ///
     /// # Arguments
     /// * `id` - Subscription id to add to the free subscription ids.
-    async fn add_free_subscription_id(&self, id: i32) {
+    async fn add_free_subscription_id(&self, id: SubscriptionIdentifier) {
         let mut free_ids = self.free_subscription_ids.write().await;
         free_ids.insert(id);
     }
@@ -592,8 +360,7 @@ impl UPClientMqtt {
         attributes: &UAttributes,
         payload: Option<Bytes>,
     ) -> Result<(), UStatus> {
-        info!("Sending message to topic: {}", topic);
-        let props = UPClientMqtt::create_mqtt_properties_from_uattributes(attributes)?;
+        let props = create_mqtt_properties_from_uattributes(attributes)?;
 
         let mut msg_builder = mqtt::MessageBuilder::new()
             .topic(topic)
@@ -605,19 +372,28 @@ impl UPClientMqtt {
         if let Some(data) = payload {
             msg_builder = msg_builder.payload(data);
         }
-
         let msg = msg_builder.finalize();
 
-        info!("Sending message: {:?}", msg);
-
-        self.mqtt_client.publish(msg).await.map_err(|e| {
-            UStatus::fail_with_code(UCode::INTERNAL, format!("Unable to publish message: {e:?}"))
-        })?;
-
-        Ok(())
+        self.mqtt_client
+            .publish(msg)
+            .await
+            .map(|_| {
+                debug!("Successfully published message [topic: {}]", topic);
+            })
+            .map_err(|e| {
+                debug!(
+                    "Failed to publish message [topic: {}]: {}",
+                    topic,
+                    e.to_string()
+                );
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("Unable to publish message: {e:?}"),
+                )
+            })
     }
 
-    /// Add a UListener to an mqtt topic.
+    /// Add a UListener to an MQTT topic.
     ///
     /// # Arguments
     /// * `topic` - Topic to add the listener to.
@@ -627,8 +403,6 @@ impl UPClientMqtt {
         topic: &str,
         listener: Arc<dyn up_rust::UListener>,
     ) -> Result<(), UStatus> {
-        info!("Adding listener to topic: {}", topic);
-
         let mut topic_listener_map = self.topic_listener_map.write().await;
 
         if !topic_listener_map.contains_key(topic) {
@@ -650,6 +424,7 @@ impl UPClientMqtt {
         // Add listener to hash set.
         let comp_listener = ComparableListener::new(listener);
         listeners.insert(comp_listener);
+        debug!("Added listener for MQTT topic: {}", topic);
 
         Ok(())
     }
@@ -709,322 +484,6 @@ impl UPClientMqtt {
         Ok(())
     }
 
-    /// Create mqtt header properties from UAttributes information.
-    /// The Message Expiry Interval gets mapped to the TTL MQTT property.
-    /// An optional UAttribute that is None gets mapped as None.
-    /// A mandatory UAttribue that has the default value gets mapped to None.
-    ///
-    /// # Arguments
-    /// * `attributes` - UAttributes to create properties from.
-    fn create_mqtt_properties_from_uattributes(
-        attributes: &UAttributes,
-    ) -> Result<mqtt::Properties, UStatus> {
-        let mut properties = mqtt::Properties::new();
-
-        // Validate UAttributes before conversion.
-        UAttributesValidators::get_validator_for_attributes(attributes)
-            .validate(attributes)
-            .map_err(|e| {
-                UStatus::fail_with_code(UCode::INTERNAL, format!("Invalid uAttributes, err: {e:?}"))
-            })?;
-
-        // Add ttl to properties as message expiry time
-        if let Some(message_expiry_interval) = attributes.ttl {
-            properties
-                .push_u32(
-                    mqtt::PropertyCode::MessageExpiryInterval,
-                    message_expiry_interval,
-                )
-                .map_err(|e| {
-                    UStatus::fail_with_code(
-                        UCode::INTERNAL,
-                        format!("Unable to create message expiry interval property, err: {e:?}"),
-                    )
-                })?;
-        }
-
-        // Add uAttributes version number to user properties.
-        push_user_property(
-            &mut properties,
-            "0",
-            "1",
-            "Unable to add uAttributes Version to mqtt User Properties",
-        )?;
-
-        // Add message ID as user property 1
-        push_user_property(
-            &mut properties,
-            "1",
-            &attributes.id.to_hyphenated_string(),
-            "Unable to add message ID to mqtt User Properties",
-        )?;
-
-        // Add message type as user property 2
-        push_user_property(
-            &mut properties,
-            "2",
-            &attributes.type_.value().to_string(),
-            "Unable to add message type to mqtt User Properties",
-        )?;
-
-        // Add message source as user property 3
-        if let Some(source) = attributes.source.to_owned().into_option() {
-            push_user_property(
-                &mut properties,
-                "3",
-                &source.to_uri(false),
-                "Unable to add message source to mqtt User Properties",
-            )?;
-        };
-
-        // Add message sink as user property 4
-        if let Some(sink) = attributes.sink.to_owned().into_option() {
-            push_user_property(
-                &mut properties,
-                "4",
-                &sink.to_uri(false),
-                "Unable to add message sink to mqtt User Properties",
-            )?
-        };
-
-        // Add message priority as user property 5 (map 0 => None)
-        if attributes.priority.value() != 0 {
-            push_user_property(
-                &mut properties,
-                "5",
-                &attributes.priority.value().to_string(),
-                "Unable to add message priority to mqtt User Properties",
-            )?
-        };
-
-        // Add message permission level as user property 7 (optional)
-        if let Some(permission_level) = &attributes.permission_level {
-            push_user_property(
-                &mut properties,
-                "7",
-                &permission_level.to_string(),
-                "Unable to add message permission level to mqtt User Properties",
-            )?;
-        }
-
-        // Add message comm Status as user property 8 (optional)
-        if let Some(comm_status) = &attributes.commstatus {
-            push_user_property(
-                &mut properties,
-                "8",
-                &comm_status.value().to_string(),
-                "Unable to add message comm status to mqtt User Properties",
-            )?;
-        }
-
-        // Add message reqId as user property 9 (map "00000000-0000-0000-0000-000000000000" => None)
-        if let Some(req_id) = attributes.reqid.to_owned().into_option() {
-            push_user_property(
-                &mut properties,
-                "9",
-                &req_id.to_hyphenated_string(),
-                "Unable to add message reqId to mqtt User Properties",
-            )?;
-        }
-
-        // Add message token as user property 10 (optional)
-        if let Some(token) = &attributes.token {
-            push_user_property(
-                &mut properties,
-                "10",
-                token,
-                "Unable to add message token to mqtt User Properties",
-            )?;
-        }
-
-        // Add message traceparent as user property 11 (optional)
-        if let Some(traceparent) = &attributes.traceparent {
-            push_user_property(
-                &mut properties,
-                "11",
-                traceparent,
-                "Unable to add message traceparent to mqtt User Properties",
-            )?;
-        }
-
-        // Add message payload format as user property 12
-        if attributes.payload_format.value() != 0 {
-            push_user_property(
-                &mut properties,
-                "12",
-                &attributes.payload_format.value().to_string(),
-                "Unable to add message payload format to mqtt User Properties",
-            )?;
-        }
-
-        Ok(properties)
-    }
-
-    /// Get UAttributes from mqtt header properties.
-    ///
-    /// # Arguments
-    /// * `props` - Mqtt properties to get UAttributes from.
-    fn get_uattributes_from_mqtt_properties(
-        props: &mqtt::Properties,
-    ) -> Result<UAttributes, UStatus> {
-        let mut attributes = UAttributes::default();
-
-        // Add the TTL UAttribute from the MessageExpiryInterval if available
-        if let Some(ttl) = props.get(paho_mqtt::PropertyCode::MessageExpiryInterval) {
-            attributes.ttl = ttl.get()
-        }
-
-        // Add UserProperty 1 to UAttributes as Message ID
-        if let Some(message_id) = props.find_user_property("1") {
-            let id = UUID::from_str(&message_id).map_err(|_| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 1 to Message ID",
-                )
-            })?;
-            attributes.id = MessageField::from(Some(id));
-        };
-
-        // Add UserProperty 2 to UAttributes as Message Type
-        if let Some(message_type_str) = props.find_user_property("2") {
-            let result = message_type_str
-                .parse::<i32>()
-                .ok()
-                .and_then(UMessageType::from_i32)
-                .map(EnumOrUnknown::from);
-
-            if let Some(message_type) = result {
-                attributes.type_ = message_type;
-            } else {
-                return Err(UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 2 to Message Type".to_string(),
-                ));
-            }
-        }
-
-        // Add UserProperty 3 to UAttributes as Message Source
-        if let Some(source_string) = props.find_user_property("3") {
-            let source = UUri::from_str(&source_string).map_err(|_| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 3 to Message Source",
-                )
-            })?;
-            attributes.source = MessageField::from(Some(source));
-        };
-
-        // Add UserProperty 4 to UAttributes as Message Sink
-        if let Some(sink_string) = props.find_user_property("4") {
-            let sink = UUri::from_str(&sink_string).map_err(|_| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 4 to Message Sink",
-                )
-            })?;
-            attributes.sink = MessageField::from(Some(sink));
-        };
-
-        // Add UserProperty 5 to UAttributes as Priority
-        if let Some(priority_string) = props.find_user_property("5") {
-            let result = priority_string
-                .parse::<i32>()
-                .ok()
-                .and_then(UPriority::from_i32)
-                .map(EnumOrUnknown::from);
-
-            if let Some(priority) = result {
-                attributes.priority = priority;
-            } else {
-                return Err(UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 2 to Message Type".to_string(),
-                ));
-            }
-        }
-
-        // Add UserProperty 7 to UAttributes as Permission Level
-        if let Some(permission_string) = props.find_user_property("7") {
-            let permission: u32 = permission_string.parse().map_err(|_| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 7 to Permission Level",
-                )
-            })?;
-            attributes.permission_level = Some(permission);
-        };
-
-        // Add UserProperty 8 to UAttributes as CommStatus
-        if let Some(comm_status_string) = props.find_user_property("8") {
-            let comm_status_int = comm_status_string.parse::<i32>().map_err(|_| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 8 to CommStatus",
-                )
-            })?;
-
-            let comm_status = UCode::from_i32(comm_status_int).ok_or_else(|| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 8 to CommStatus",
-                )
-            })?;
-
-            attributes.commstatus = Some(EnumOrUnknown::from(comm_status));
-        }
-
-        // Add UserProperty 9 to UAttributes as Request ID
-        if let Some(req_id) = props.find_user_property("9") {
-            let id = UUID::from_str(&req_id).map_err(|_| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 9 to Request ID",
-                )
-            })?;
-            attributes.reqid = MessageField::from(Some(id));
-        };
-
-        // Add UserProperty 10 to UAttributes as Token
-        if let Some(token) = props.find_user_property("10") {
-            attributes.token = Some(token);
-        };
-
-        // Add UserProperty 11 to UAttributes as Traceparent
-        if let Some(traceparent) = props.find_user_property("11") {
-            attributes.traceparent = Some(traceparent);
-        };
-
-        // Add UserProperty 12 to UAttributes as Payload Format
-        if let Some(payload_format_string) = props.find_user_property("12") {
-            let result = payload_format_string
-                .parse::<i32>()
-                .ok()
-                .and_then(UPayloadFormat::from_i32)
-                .map(EnumOrUnknown::from);
-
-            if let Some(payload_format) = result {
-                attributes.payload_format = payload_format;
-            } else {
-                return Err(UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    "Unable to map UserProperty 2 to Message Type".to_string(),
-                ));
-            }
-        }
-
-        // Validate the reconstructed attributes
-        UAttributesValidators::get_validator_for_attributes(&attributes)
-            .validate(&attributes)
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to construct uAttributes, err: {e:?}"),
-                )
-            })?;
-
-        Ok(attributes)
-    }
-
     /// Creates an MQTT topic for a source and sink uProtocol URI.
     ///
     /// # Arguments
@@ -1040,8 +499,339 @@ impl UPClientMqtt {
     }
 }
 
+// Push a user property from UAttributes to the MQTT Properties
+fn push_user_property(
+    properties: &mut mqtt::Properties,
+    code: &str,
+    value: &str,
+    error_message: &str,
+) -> Result<(), UStatus> {
+    properties
+        .push_string_pair(mqtt::PropertyCode::UserProperty, code, value)
+        .map_err(|e| {
+            UStatus::fail_with_code(UCode::INTERNAL, format!("{error_message}, err: {e:?}"))
+        })
+}
+
+/// Create mqtt header properties from UAttributes information.
+/// The Message Expiry Interval gets mapped to the TTL MQTT property.
+/// An optional UAttribute that is None gets mapped as None.
+/// A mandatory UAttribue that has the default value gets mapped to None.
+///
+/// # Arguments
+/// * `attributes` - UAttributes to create properties from.
+fn create_mqtt_properties_from_uattributes(
+    attributes: &UAttributes,
+) -> Result<mqtt::Properties, UStatus> {
+    let mut properties = mqtt::Properties::new();
+
+    // Validate UAttributes before conversion.
+    UAttributesValidators::get_validator_for_attributes(attributes)
+        .validate(attributes)
+        .map_err(|e| {
+            UStatus::fail_with_code(UCode::INTERNAL, format!("Invalid uAttributes, err: {e:?}"))
+        })?;
+
+    // Add ttl to properties as message expiry time
+    if let Some(message_expiry_interval) = attributes.ttl {
+        properties
+            .push_u32(
+                mqtt::PropertyCode::MessageExpiryInterval,
+                message_expiry_interval,
+            )
+            .map_err(|e| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("Unable to create message expiry interval property, err: {e:?}"),
+                )
+            })?;
+    }
+
+    // Add uAttributes version number to user properties.
+    push_user_property(
+        &mut properties,
+        "0",
+        "1",
+        "Unable to add uAttributes Version to mqtt User Properties",
+    )?;
+
+    // Add message ID as user property 1
+    push_user_property(
+        &mut properties,
+        "1",
+        &attributes.id.to_hyphenated_string(),
+        "Unable to add message ID to mqtt User Properties",
+    )?;
+
+    // Add message type as user property 2
+    push_user_property(
+        &mut properties,
+        "2",
+        &attributes.type_.value().to_string(),
+        "Unable to add message type to mqtt User Properties",
+    )?;
+
+    // Add message source as user property 3
+    if let Some(source) = attributes.source.to_owned().into_option() {
+        push_user_property(
+            &mut properties,
+            "3",
+            &source.to_uri(false),
+            "Unable to add message source to mqtt User Properties",
+        )?;
+    };
+
+    // Add message sink as user property 4
+    if let Some(sink) = attributes.sink.to_owned().into_option() {
+        push_user_property(
+            &mut properties,
+            "4",
+            &sink.to_uri(false),
+            "Unable to add message sink to mqtt User Properties",
+        )?
+    };
+
+    // Add message priority as user property 5 (map 0 => None)
+    if attributes.priority.value() != 0 {
+        push_user_property(
+            &mut properties,
+            "5",
+            &attributes.priority.value().to_string(),
+            "Unable to add message priority to mqtt User Properties",
+        )?
+    };
+
+    // Add message permission level as user property 7 (optional)
+    if let Some(permission_level) = &attributes.permission_level {
+        push_user_property(
+            &mut properties,
+            "7",
+            &permission_level.to_string(),
+            "Unable to add message permission level to mqtt User Properties",
+        )?;
+    }
+
+    // Add message comm Status as user property 8 (optional)
+    if let Some(comm_status) = &attributes.commstatus {
+        push_user_property(
+            &mut properties,
+            "8",
+            &comm_status.value().to_string(),
+            "Unable to add message comm status to mqtt User Properties",
+        )?;
+    }
+
+    // Add message reqId as user property 9 (map "00000000-0000-0000-0000-000000000000" => None)
+    if let Some(req_id) = attributes.reqid.to_owned().into_option() {
+        push_user_property(
+            &mut properties,
+            "9",
+            &req_id.to_hyphenated_string(),
+            "Unable to add message reqId to mqtt User Properties",
+        )?;
+    }
+
+    // Add message token as user property 10 (optional)
+    if let Some(token) = &attributes.token {
+        push_user_property(
+            &mut properties,
+            "10",
+            token,
+            "Unable to add message token to mqtt User Properties",
+        )?;
+    }
+
+    // Add message traceparent as user property 11 (optional)
+    if let Some(traceparent) = &attributes.traceparent {
+        push_user_property(
+            &mut properties,
+            "11",
+            traceparent,
+            "Unable to add message traceparent to mqtt User Properties",
+        )?;
+    }
+
+    // Add message payload format as user property 12
+    if attributes.payload_format.value() != 0 {
+        push_user_property(
+            &mut properties,
+            "12",
+            &attributes.payload_format.value().to_string(),
+            "Unable to add message payload format to mqtt User Properties",
+        )?;
+    }
+
+    Ok(properties)
+}
+
+/// Get UAttributes from mqtt header properties.
+///
+/// # Arguments
+/// * `props` - Mqtt properties to get UAttributes from.
+fn get_uattributes_from_mqtt_properties(props: &mqtt::Properties) -> Result<UAttributes, UStatus> {
+    let mut attributes = UAttributes::default();
+
+    // Add the TTL UAttribute from the MessageExpiryInterval if available
+    if let Some(ttl) = props.get(paho_mqtt::PropertyCode::MessageExpiryInterval) {
+        attributes.ttl = ttl.get()
+    }
+
+    // Add UserProperty 1 to UAttributes as Message ID
+    if let Some(message_id) = props.find_user_property("1") {
+        let id = UUID::from_str(&message_id).map_err(|_| {
+            UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 1 to Message ID",
+            )
+        })?;
+        attributes.id = MessageField::from(Some(id));
+    };
+
+    // Add UserProperty 2 to UAttributes as Message Type
+    if let Some(message_type_str) = props.find_user_property("2") {
+        let result = message_type_str
+            .parse::<i32>()
+            .ok()
+            .and_then(UMessageType::from_i32)
+            .map(EnumOrUnknown::from);
+
+        if let Some(message_type) = result {
+            attributes.type_ = message_type;
+        } else {
+            return Err(UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 2 to Message Type".to_string(),
+            ));
+        }
+    }
+
+    // Add UserProperty 3 to UAttributes as Message Source
+    if let Some(source_string) = props.find_user_property("3") {
+        let source = UUri::from_str(&source_string).map_err(|_| {
+            UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 3 to Message Source",
+            )
+        })?;
+        attributes.source = MessageField::from(Some(source));
+    };
+
+    // Add UserProperty 4 to UAttributes as Message Sink
+    if let Some(sink_string) = props.find_user_property("4") {
+        let sink = UUri::from_str(&sink_string).map_err(|_| {
+            UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 4 to Message Sink",
+            )
+        })?;
+        attributes.sink = MessageField::from(Some(sink));
+    };
+
+    // Add UserProperty 5 to UAttributes as Priority
+    if let Some(priority_string) = props.find_user_property("5") {
+        let result = priority_string
+            .parse::<i32>()
+            .ok()
+            .and_then(UPriority::from_i32)
+            .map(EnumOrUnknown::from);
+
+        if let Some(priority) = result {
+            attributes.priority = priority;
+        } else {
+            return Err(UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 2 to Message Type".to_string(),
+            ));
+        }
+    }
+
+    // Add UserProperty 7 to UAttributes as Permission Level
+    if let Some(permission_string) = props.find_user_property("7") {
+        let permission: u32 = permission_string.parse().map_err(|_| {
+            UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 7 to Permission Level",
+            )
+        })?;
+        attributes.permission_level = Some(permission);
+    };
+
+    // Add UserProperty 8 to UAttributes as CommStatus
+    if let Some(comm_status_string) = props.find_user_property("8") {
+        let comm_status_int = comm_status_string.parse::<i32>().map_err(|_| {
+            UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 8 to CommStatus",
+            )
+        })?;
+
+        let comm_status = UCode::from_i32(comm_status_int).ok_or_else(|| {
+            UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 8 to CommStatus",
+            )
+        })?;
+
+        attributes.commstatus = Some(EnumOrUnknown::from(comm_status));
+    }
+
+    // Add UserProperty 9 to UAttributes as Request ID
+    if let Some(req_id) = props.find_user_property("9") {
+        let id = UUID::from_str(&req_id).map_err(|_| {
+            UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 9 to Request ID",
+            )
+        })?;
+        attributes.reqid = MessageField::from(Some(id));
+    };
+
+    // Add UserProperty 10 to UAttributes as Token
+    if let Some(token) = props.find_user_property("10") {
+        attributes.token = Some(token);
+    };
+
+    // Add UserProperty 11 to UAttributes as Traceparent
+    if let Some(traceparent) = props.find_user_property("11") {
+        attributes.traceparent = Some(traceparent);
+    };
+
+    // Add UserProperty 12 to UAttributes as Payload Format
+    if let Some(payload_format_string) = props.find_user_property("12") {
+        let result = payload_format_string
+            .parse::<i32>()
+            .ok()
+            .and_then(UPayloadFormat::from_i32)
+            .map(EnumOrUnknown::from);
+
+        if let Some(payload_format) = result {
+            attributes.payload_format = payload_format;
+        } else {
+            return Err(UStatus::fail_with_code(
+                UCode::INTERNAL,
+                "Unable to map UserProperty 2 to Message Type".to_string(),
+            ));
+        }
+    }
+
+    // Validate the reconstructed attributes
+    UAttributesValidators::get_validator_for_attributes(&attributes)
+        .validate(&attributes)
+        .map_err(|e| {
+            UStatus::fail_with_code(
+                UCode::INTERNAL,
+                format!("Unable to construct uAttributes, err: {e:?}"),
+            )
+        })?;
+
+    Ok(attributes)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
+    use mqtt_client::MockMqttClientOperations;
     use protobuf::Enum;
     use up_rust::{MockUListener, UMessageType, UPayloadFormat, UPriority, UUID};
 
@@ -1310,24 +1100,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_free_subscription_id() {
-        let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClientOperations::new()),
+        let up_client = Mqtt5Transport {
+            mqtt_client: Box::new(MockMqttClientOperations::new()),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..3).collect())),
-            cb_message_handle: None,
+            message_callback_handle: None,
         };
 
-        let expected_vals: Vec<i32> = up_client
+        let expected_vals: Vec<u16> = up_client
             .free_subscription_ids
             .read()
             .await
             .iter()
             .cloned()
             .collect();
-        let mut collected_vals = Vec::<i32>::new();
+        let mut collected_vals = Vec::<u16>::new();
 
         let result = up_client.get_free_subscription_id().await;
 
@@ -1350,14 +1140,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_free_subscription_id() {
-        let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(MockMqttClientOperations::new()),
+        let up_client = Mqtt5Transport {
+            mqtt_client: Box::new(MockMqttClientOperations::new()),
             subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
             topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..3).collect())),
-            cb_message_handle: None,
+            message_callback_handle: None,
         };
 
         let expected_id = 7;
@@ -1381,14 +1171,14 @@ mod tests {
             .once()
             .return_const(Ok(()));
 
-        let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(client_operations),
+        let up_client = Mqtt5Transport {
+            mqtt_client: Box::new(client_operations),
             subscription_topic_map: sub_map.clone(),
             topic_listener_map: topic_map.clone(),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
-            cb_message_handle: None,
+            message_callback_handle: None,
         };
 
         assert!(topic_map.read().await.is_empty());
@@ -1425,14 +1215,14 @@ mod tests {
         let mut client_operations = MockMqttClientOperations::new();
         client_operations.expect_unsubscribe().return_const(Ok(()));
 
-        let up_client = UPClientMqtt {
-            mqtt_client: Arc::new(client_operations),
+        let up_client = Mqtt5Transport {
+            mqtt_client: Box::new(client_operations),
             subscription_topic_map: sub_map.clone(),
             topic_listener_map: topic_map.clone(),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
-            cb_message_handle: None,
+            message_callback_handle: None,
         };
 
         assert!(!topic_map.read().await.is_empty());
@@ -1536,8 +1326,7 @@ mod tests {
         expected_attributes_num: usize,
         expected_error: Option<UStatus>,
     ) {
-        // Create the mqtt properties from the input UAttributes
-        let props = UPClientMqtt::create_mqtt_properties_from_uattributes(&attributes);
+        let props = create_mqtt_properties_from_uattributes(&attributes);
 
         // Check if properties could be created at all
         if props.is_ok() {
@@ -1615,7 +1404,7 @@ mod tests {
         (attributes, properties): (UAttributes, mqtt::Properties),
         expected_error: Option<UStatus>,
     ) {
-        let attributes_result = UPClientMqtt::get_uattributes_from_mqtt_properties(&properties);
+        let attributes_result = get_uattributes_from_mqtt_properties(&properties);
 
         if attributes_result.is_ok() {
             let actual_attributes = attributes_result.unwrap();
@@ -1783,6 +1572,9 @@ mod tests {
     #[test_case("VIN.vehicles/A8000/2/8A50", "VIN.vehicles/B8000/2/8A50", false; "Mismatched entity id")]
     #[test_case("VIN.vehicles/A8000/2/8A50", "+/A8000/2/8A50", true; "Single wildcard matchs")]
     fn test_compare_topic(topic: &str, pattern: &str, expected_result: bool) {
-        assert_eq!(UPClientMqtt::compare_topic(topic, pattern), expected_result);
+        assert_eq!(
+            Mqtt5Transport::compare_topic(topic, pattern),
+            expected_result
+        );
     }
 }

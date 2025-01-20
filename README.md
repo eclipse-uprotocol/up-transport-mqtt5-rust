@@ -44,11 +44,27 @@ docker compose -f tests/mosquitto/docker-compose.yaml up --detach
 
 2. Run the Subscriber
 
+The Subscriber supports configuration via command line options and/or environment variables:
+
+```bash
+cargo run --example subscriber_example -- --help
+```
+
+Run the Subscriber with options appropriate for your MQTT broker. When using the Mosquitto broker started via Docker Compose, then the defaults should work:
+
 ```bash
 cargo run --example subscriber_example
 ```
 
 3. Run the Publisher
+
+The Publisher supports configuration via command line options and/or environment variables:
+
+```bash
+cargo run --example publisher_example -- --help
+```
+
+Run the Publisher with options appropriate for your MQTT broker. When using the Mosquitto broker started via Docker Compose, then the defaults should work:
 
 ```bash
 cargo run --example publisher_example

@@ -32,11 +32,24 @@ repository = "https://github.com/eclipse-uprotocol/up-client-mqtt5-rust"
 rust-version = "1.81"
 version = "0.2.0"
 
+[features]
+default = ["cli"]
+cli = ["clap"]
+
 [dependencies]
 async-channel = { version = "1.6" }
 async-trait = { version = "0.1" }
 bytes = { version = "1.5" }
-env_logger = { version = "0.10" }
+clap = { version = "4.4", features = [
+    "std",
+    "derive",
+    "env",
+    "color",
+    "help",
+    "usage",
+    "error-context",
+    "suggestions",
+], optional = true }
 futures = { version = "0.3" }
 log = { version = "0.4" }
 paho-mqtt = { version = "0.12.3", features = ["vendored-ssl"] }
@@ -50,3 +63,12 @@ test-case = { version = "3.3" }
 up-rust = { version = "0.4.0", default-features = false, features = [
     "test-util",
 ] }
+env_logger = { version = "0.11" }
+
+[[example]]
+name = "publisher_example"
+required-features = ["cli"]
+
+[[example]]
+name = "subscriber_example"
+required-features = ["cli"]
