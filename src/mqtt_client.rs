@@ -25,6 +25,8 @@ const PARAM_MQTT_BUFFER_SIZE: &str = "mqtt-buffer-size";
 #[cfg(feature = "cli")]
 const PARAM_MQTT_CA_PATH: &str = "mqtt-ca-path";
 #[cfg(feature = "cli")]
+const PARAM_MQTT_CLEAN_START: &str = "mqtt-clean-start";
+#[cfg(feature = "cli")]
 const PARAM_MQTT_CLIENT_ID: &str = "mqtt-client-id";
 #[cfg(feature = "cli")]
 const PARAM_MQTT_ENABLE_HOSTNAME_VERIFICATION: &str = "mqtt-enable-hostname-verification";
@@ -47,6 +49,12 @@ const PARAM_MQTT_SESSION_EXPIRY: &str = "mqtt-session-expiry";
 #[cfg(feature = "cli")]
 const PARAM_MQTT_TRUST_STORE_PATH: &str = "mqtt-trust-store-path";
 
+const DEFAULT_BROKER_URI: &str = "mqtt://localhost:1883";
+const DEFAULT_CLEAN_START: bool = false;
+const DEFAULT_MAX_BUFFERED_MESSAGES: u16 = 20;
+const DEFAULT_MAX_SUBSCRIPTIONS: u16 = 50;
+const DEFAULT_SESSION_EXPIRY_INTERVAL: u32 = 0;
+
 #[cfg_attr(feature = "cli", derive(Args))]
 /// Configuration options for the MQTT client.
 pub struct MqttClientOptions {
@@ -55,19 +63,26 @@ pub struct MqttClientOptions {
     pub client_id: Option<String>,
 
     /// The URI of the MQTT broker to connect to.
-    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_URI, value_name = "URI", env = "MQTT_BROKER_URI", default_value = "mqtt://localhost:1883"))]
+    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_URI, value_name = "URI", env = "MQTT_BROKER_URI", default_value = DEFAULT_BROKER_URI))]
     pub broker_uri: String,
 
     /// The maximum number of outbound messages that the transport can buffer locally.
-    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_BUFFER_SIZE, value_name = "SIZE", env = "MQTT_BUFFER_SIZE", default_value = "20"))]
+    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_BUFFER_SIZE, value_name = "SIZE", env = "MQTT_BUFFER_SIZE", default_value_t = DEFAULT_MAX_BUFFERED_MESSAGES))]
     pub max_buffered_messages: u16,
 
     /// The maximum number of distinct topic filters that the transport supports.
-    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_MAX_SUBSCRIPTIONS, value_name = "NUMBER", env = "MQTT_MAX_SUBSCRIPTIONS", default_value = "50"))]
+    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_MAX_SUBSCRIPTIONS, value_name = "NUMBER", env = "MQTT_MAX_SUBSCRIPTIONS", default_value_t = DEFAULT_MAX_SUBSCRIPTIONS))]
     pub max_subscriptions: u16,
 
+    /// Indicates if the MQTT broker should start a new session (`true`) or resume an existing session
+    /// when a connection has been established.
+    // [impl->req~up-transport-mqtt5-session-config~1]
+    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_CLEAN_START, value_name = "FLAG", env = "MQTT_CLEAN_START", default_value_t = DEFAULT_CLEAN_START))]
+    pub clean_start: bool,
+
     /// The number of seconds after which the MQTT broker should discard all (client) session state.
-    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_SESSION_EXPIRY, value_name = "SECONDS", env = "MQTT_SESSION_EXPIRY", default_value = "0"))]
+    // [impl->req~up-transport-mqtt5-session-config~1]
+    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_SESSION_EXPIRY, value_name = "SECONDS", env = "MQTT_SESSION_EXPIRY", default_value_t = DEFAULT_SESSION_EXPIRY_INTERVAL))]
     pub session_expiry_interval: u32,
 
     /// The username to use for authenticating to the MQTT endpoint.
@@ -83,6 +98,40 @@ pub struct MqttClientOptions {
     pub ssl_options: Option<SslOptions>,
 }
 
+impl Default for MqttClientOptions {
+    /// Creates new default options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use up_transport_mqtt5::MqttClientOptions;
+    ///
+    /// let options = MqttClientOptions::default();
+    /// assert!(options.client_id.is_none());
+    /// assert_eq!(options.broker_uri, "mqtt://localhost:1883");
+    /// assert!(!options.clean_start);
+    /// assert_eq!(options.max_buffered_messages, 20);
+    /// assert_eq!(options.max_subscriptions, 50);
+    /// assert_eq!(options.session_expiry_interval, 0);
+    /// assert!(options.username.is_none());
+    /// assert!(options.password.is_none());
+    /// assert!(options.ssl_options.is_none());
+    /// ```
+    fn default() -> Self {
+        Self {
+            broker_uri: DEFAULT_BROKER_URI.to_string(),
+            clean_start: DEFAULT_CLEAN_START,
+            client_id: None,
+            max_buffered_messages: DEFAULT_MAX_BUFFERED_MESSAGES,
+            max_subscriptions: DEFAULT_MAX_SUBSCRIPTIONS,
+            password: None,
+            session_expiry_interval: DEFAULT_SESSION_EXPIRY_INTERVAL,
+            ssl_options: None,
+            username: None,
+        }
+    }
+}
+
 impl TryFrom<&MqttClientOptions> for paho_mqtt::ConnectOptions {
     type Error = paho_mqtt::Error;
     fn try_from(options: &MqttClientOptions) -> Result<Self, Self::Error> {
@@ -91,9 +140,10 @@ impl TryFrom<&MqttClientOptions> for paho_mqtt::ConnectOptions {
         connect_options_builder
             .automatic_reconnect(Duration::from_secs(1), Duration::from_secs(16));
         connect_options_builder
-            // always try to resume existing session
-            .clean_start(false)
+            // [impl->req~up-transport-mqtt5-session-config~1]
+            .clean_start(options.clean_start)
             // session expiration as defined by client options
+            // [impl->req~up-transport-mqtt5-session-config~1]
             .properties(paho_mqtt::properties![paho_mqtt::PropertyCode::SessionExpiryInterval => options.session_expiry_interval])
             .ssl_options(ssl_options);
         if let Some(v) = options.username.as_ref() {
@@ -327,5 +377,28 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
                 )
             })
             .map(|_response| Ok(()))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use paho_mqtt::ConnectOptions;
+
+    use super::MqttClientOptions;
+
+    #[test]
+    // [utest->req~up-transport-mqtt5-session-config~1]
+    fn test_config_parsing() {
+        let options = MqttClientOptions {
+            clean_start: true,
+            session_expiry_interval: 60 * 60 * 24,
+            ..Default::default()
+        };
+        let connect_options =
+            ConnectOptions::try_from(&options).expect("failed to create ConenctOptions");
+        assert!(connect_options.clean_start());
+        // it is not possible to verify that the session expiry interval has been correctly set,
+        // because the ConnectOptions struct does not (yet) provide access to the CONNECT packet
+        // properties
     }
 }

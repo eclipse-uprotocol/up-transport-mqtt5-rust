@@ -5,8 +5,9 @@ pub async fn create_up_transport_mqtt<S: Into<String>>(
     authority_name: S,
 ) -> Result<Mqtt5Transport, UStatus> {
     let config = MqttClientOptions {
-        client_id: None,
         broker_uri: "mqtt://localhost:1883".to_string(),
+        clean_start: false,
+        client_id: None,
         max_buffered_messages: 100,
         max_subscriptions: 100,
         session_expiry_interval: 3600,
