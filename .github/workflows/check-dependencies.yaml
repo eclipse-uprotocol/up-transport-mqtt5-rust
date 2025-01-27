@@ -61,7 +61,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: 3rd-party-dependencies
-        path: $DASH_SUMMARY
+        path: ${{ env.DASH_SUMMARY }}
     - name: "Determine exit code"
       env:
         EXIT_CODE: ${{ steps.run-checks.outputs.checks-failed }}
