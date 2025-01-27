@@ -13,7 +13,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    str::FromStr,
     sync::Arc,
 };
 
@@ -24,19 +23,18 @@ use log::{debug, trace};
 use mqtt_client::MqttClientOperations;
 pub use mqtt_client::{MqttClientOptions, SslOptions};
 use paho_mqtt::{self as mqtt, Message, QOS_1};
-use protobuf::{Enum, EnumOrUnknown, MessageField};
 use tokio::{sync::RwLock, task::JoinHandle};
-use up_rust::{
-    ComparableListener, UAttributes, UAttributesValidators, UCode, UMessage, UMessageType,
-    UPayloadFormat, UPriority, UStatus, UUri, UUriError, UUID,
-};
+use up_rust::{ComparableListener, UAttributes, UCode, UMessage, UStatus, UUri, UUriError};
 
+mod mapping;
 mod mqtt_client;
 mod transport;
 
 const MQTT_TOPIC_ANY_SEGMENT_WILDCARD: &str = "+";
 
 type SubscriptionIdentifier = u16;
+type SubscriptionTopics = Arc<RwLock<HashMap<SubscriptionIdentifier, String>>>;
+type TopicListeners = Arc<RwLock<paho_mqtt::TopicMatcher<HashSet<ComparableListener>>>>;
 
 /// The transport's mode of operation.
 pub enum TransportMode {
@@ -149,10 +147,10 @@ impl TransportMode {
 pub struct Mqtt5Transport {
     /// Client instance for connecting to mqtt broker.
     mqtt_client: Box<dyn MqttClientOperations>,
-    /// Map of subscription identifiers to subscribed topics.
-    subscription_topic_map: Arc<RwLock<HashMap<SubscriptionIdentifier, String>>>,
-    /// Map of topics to listeners.
-    topic_listener_map: Arc<RwLock<HashMap<String, HashSet<ComparableListener>>>>,
+    /// Mapping of subscription identifiers to topic filters.
+    subscription_topics: SubscriptionTopics,
+    /// Mapping of topic filters to listeners.
+    topic_listeners: TopicListeners,
     /// My authority
     authority_name: String,
     /// The transport's mode of operation.
@@ -175,13 +173,11 @@ impl Mqtt5Transport {
         options: MqttClientOptions,
         authority_name: String,
     ) -> Result<Self, UStatus> {
-        let subscription_topic_map = Arc::new(RwLock::new(HashMap::new()));
-        let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
+        let subscription_topics = Arc::new(RwLock::new(HashMap::new()));
+        // let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
+        let topic_listeners = Arc::new(RwLock::new(paho_mqtt::TopicMatcher::new()));
         let free_subscription_ids =
             Arc::new(RwLock::new((1..(options.max_subscriptions) + 1).collect()));
-
-        let subscription_topic_map_handle = subscription_topic_map.clone();
-        let topic_listener_map_handle = topic_listener_map.clone();
 
         // Create the MQTT client
         let mut client_operations =
@@ -189,15 +185,15 @@ impl Mqtt5Transport {
 
         // Create the callback for processing messages received from the broker
         let message_callback_handle = Some(Self::create_cb_message_handler(
-            subscription_topic_map_handle,
-            topic_listener_map_handle,
+            subscription_topics.clone(),
+            topic_listeners.clone(),
             client_operations.get_message_stream(),
         ));
 
         client_operations.connect(&options).await.map(|_| Self {
             mqtt_client: Box::new(client_operations),
-            subscription_topic_map,
-            topic_listener_map,
+            subscription_topics,
+            topic_listeners,
             authority_name,
             mode,
             free_subscription_ids,
@@ -215,12 +211,12 @@ impl Mqtt5Transport {
     // Creates a callback message handler that listens for incoming messages and notifies listeners asynchronously.
     //
     // # Arguments
-    // * `subscription_map` - Map of subscription identifiers to subscribed topics.
-    // * `topic_map` - Map of topics to listeners.
-    // * `message_stream` - Stream of incoming mqtt messages.
+    // * `subscription_topics` - Map of subscription identifiers to subscribed topic filters.
+    // * `topic_listeners` - Map of topic filters to listeners.
+    // * `message_stream` - Stream of incoming MQTT PUBLISH packets.
     fn create_cb_message_handler(
-        subscription_map: Arc<RwLock<HashMap<SubscriptionIdentifier, String>>>,
-        topic_map: Arc<RwLock<HashMap<String, HashSet<ComparableListener>>>>,
+        subscription_topics: SubscriptionTopics,
+        topic_listeners: TopicListeners,
         mut message_stream: Receiver<Option<Message>>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
@@ -230,98 +226,64 @@ impl Mqtt5Transport {
                     trace!("Received empty message from stream.");
                     continue;
                 };
-                let topic = msg.topic();
-                let sub_id = msg
-                    .properties()
-                    .get_int(paho_mqtt::PropertyCode::SubscriptionIdentifier)
-                    .and_then(|v| SubscriptionIdentifier::try_from(v).ok());
 
-                // Get attributes from mqtt header.
-                let umessage = if msg.properties().is_empty() {
-                    protobuf::Message::parse_from_bytes(msg.payload()).unwrap()
-                } else {
-                    let uattributes = {
-                        match get_uattributes_from_mqtt_properties(msg.properties()) {
-                            Ok(uattributes) => uattributes,
-                            Err(e) => {
-                                debug!("Unable to get UAttributes from NQTT properties: {}", e);
-                                continue;
-                            }
-                        }
-                    };
-                    UMessage {
-                        attributes: Some(uattributes).into(),
-                        payload: Some(Bytes::copy_from_slice(msg.payload())),
-                        ..Default::default()
-                    }
-                };
-
-                // If subscription ID is present, only notify listeners for that subscription.
-                let listeners = if let Some(sub_id) = sub_id {
-                    let sub_topic = {
-                        let subscription_map_read = subscription_map.read().await;
-
-                        let Some(sub_topic) = subscription_map_read.get(&sub_id) else {
-                            trace!(
-                                "Received message with subscription id that is not registered: {}",
-                                sub_id
+                // extract uProtocol message from MQTT PUBLISH packet
+                let umessage =
+                    match mapping::create_uattributes_from_mqtt_properties(msg.properties()) {
+                        Ok(uattributes) => UMessage {
+                            attributes: Some(uattributes).into(),
+                            payload: Some(Bytes::copy_from_slice(msg.payload())),
+                            ..Default::default()
+                        },
+                        Err(e) => {
+                            debug!(
+                                "Failed to map MQTT PUBLISH packet to uProtocol message: {}",
+                                e
                             );
                             continue;
-                        };
-                        sub_topic.clone()
+                        }
                     };
 
-                    let owned_listeners = {
-                        let topic_map_read = topic_map.read().await;
+                let subscription_ids: Vec<SubscriptionIdentifier> = msg
+                    .properties()
+                    .iter(paho_mqtt::PropertyCode::SubscriptionIdentifier)
+                    .filter_map(|property| property.get_u16())
+                    .collect();
 
-                        let Some(listeners) = topic_map_read.get(&sub_topic) else {
-                            trace!("No listeners registered for topic: {}", sub_topic);
-                            continue;
-                        };
-                        listeners.clone()
-                    };
-
-                    owned_listeners
+                let mut listeners_to_invoke = HashSet::new();
+                let topic_listeners_read = topic_listeners.read().await;
+                if subscription_ids.is_empty() {
+                    // determine listeners based on message's topic
+                    topic_listeners_read.matches(msg.topic()).for_each(
+                        |(_topic_filter, listeners)| {
+                            listeners.iter().for_each(|listener| {
+                                listeners_to_invoke.insert(listener.to_owned());
+                            });
+                        },
+                    );
                 } else {
-                    // Filter the topic map for topics that match the received topic, including wildcards.
-                    let listeners = {
-                        let topic_map_read = topic_map.read().await;
-
-                        topic_map_read
-                            .iter()
-                            .filter(|(key, _)| Mqtt5Transport::compare_topic(topic, key))
-                            .flat_map(|(_topic, listener)| listener.to_owned())
-                            .collect()
-                    };
-                    listeners
+                    // determine listeners registered for subscription IDs
+                    let subscription_map_read = subscription_topics.read().await;
+                    subscription_ids.iter().for_each(|sub_id| {
+                        if let Some(listeners) = subscription_map_read
+                            .get(sub_id)
+                            .and_then(|topic_filter| topic_listeners_read.get(topic_filter))
+                        {
+                            listeners.iter().for_each(|listener| {
+                                listeners_to_invoke.insert(listener.to_owned());
+                            });
+                        }
+                    });
                 };
 
-                for listener in listeners {
+                for listener in listeners_to_invoke {
                     let msg = umessage.clone();
                     tokio::spawn(async move {
-                        listener.on_receive(msg.clone()).await;
+                        listener.on_receive(msg).await;
                     });
                 }
             }
         })
-    }
-
-    /// Compare a topic to a topic pattern. Supports single level wildcards.
-    ///
-    /// # Arguments
-    /// * `topic` - Topic to compare.
-    /// * `pattern` - Topic pattern to compare against.
-    fn compare_topic(topic: &str, pattern: &str) -> bool {
-        let topic_parts = topic.split('/');
-        let pattern_parts = pattern.split('/');
-
-        for (topic_part, pattern_part) in topic_parts.zip(pattern_parts) {
-            if topic_part != pattern_part && pattern_part != "+" {
-                return false;
-            }
-        }
-
-        true
     }
 
     /// Get an available subscription id to use.
@@ -339,37 +301,61 @@ impl Mqtt5Transport {
         }
     }
 
-    /// Add an unused subscription id to the free subscription ids.
+    /// Returns a subscription ID back to the pool of free/unused subscription IDs.
     ///
     /// # Arguments
-    /// * `id` - Subscription id to add to the free subscription ids.
-    async fn add_free_subscription_id(&self, id: SubscriptionIdentifier) {
+    /// * `id` - The subscription ID to release.
+    async fn release_subscription_id(&self, id: SubscriptionIdentifier) {
         let mut free_ids = self.free_subscription_ids.write().await;
         free_ids.insert(id);
     }
 
-    /// Send UMessage to mqtt topic.
+    /// Publishes a uProtocol message to an MQTT topic.
     ///
+    /// Note that the ter _publish_ used here does not refer to the type
+    /// of uProtocol message being sent.
+    ///
+    /// This function creates an MQTT PUBLISH packet from the given metadata,
+    /// payload and topic name and transfers it to the MQTT broker.
+    ///  
     /// # Arguments
-    /// * `topic` - Mqtt topic to send message to.
-    /// * `attributes` - UAttributes to send with message.
-    /// * `payload` - UMessage payload to send.
+    /// * `attributes` - The uProtocol message's metadata.
+    /// * `payload` - The uProtocol message's payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the given attributes are invalid or the
+    /// message cannot be sent to the MQTT broker.
     async fn send_message(
         &self,
-        topic: &str,
         attributes: &UAttributes,
         payload: Option<Bytes>,
     ) -> Result<(), UStatus> {
-        let props = create_mqtt_properties_from_uattributes(attributes)?;
+        // put metadata into MQTT 5 message properties
+        let props = mapping::create_mqtt_properties_from_uattributes(attributes)?;
+
+        // Get mqtt topic string from source and sink uuris
+        let src_uri = attributes.source.as_ref().ok_or(UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            "uProtocol Message has no source URI",
+        ))?;
+        // [impl->dsn~up-transport-mqtt5-e2e-topic-names~1]
+        // [impl->dsn~up-transport-mqtt5-d2d-topic-names~1]
+        let topic = self
+            .to_mqtt_topic_string(src_uri, attributes.sink.as_ref())
+            .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
 
         let mut msg_builder = mqtt::MessageBuilder::new()
-            .topic(topic)
+            .topic(topic.clone())
             .properties(props)
-            .qos(QOS_1); // QOS 1 - Delivered and received at least once
+            // The uProtocol spec does not mandate a particular MQTT QoS to use.
+            // QoS 1 makes sure that the message is transferred to the MQTT broker
+            // at least once.
+            .qos(QOS_1);
 
-        // If there is payload to send, add it to the message.
-        // [impl->dsn~up-transport-mqtt5-payload-mapping~1]
         if let Some(data) = payload {
+            // If there is payload to send, add it to the message unaltered.
+            // [impl->dsn~up-transport-mqtt5-payload-mapping~1]
             msg_builder = msg_builder.payload(data);
         }
         let msg = msg_builder.finalize();
@@ -377,108 +363,107 @@ impl Mqtt5Transport {
         self.mqtt_client
             .publish(msg)
             .await
-            .map(|_| {
-                debug!("Successfully published message [topic: {}]", topic);
-            })
-            .map_err(|e| {
+            .inspect(|_| {
                 debug!(
-                    "Failed to publish message [topic: {}]: {}",
-                    topic,
-                    e.to_string()
-                );
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to publish message: {e:?}"),
+                    "Successfully sent uProtocol message [MQTT topic: {}]",
+                    topic
                 )
+            })
+            .inspect_err(|e| {
+                debug!("Failed to send uProtocol message [MQTT topic: {topic}]: {e}");
             })
     }
 
-    /// Add a UListener to an MQTT topic.
+    /// Adds a listener for an MQTT topic filter.
     ///
     /// # Arguments
-    /// * `topic` - Topic to add the listener to.
-    /// * `listener` - Listener to call when the topic recieves a message.
+    /// * `topic_filter` - The topic filter to add the listener for.
+    /// * `listener` - The callback to invoke for each incoming message that matches the filter.
     async fn add_listener(
         &self,
-        topic: &str,
+        topic_filter: &str,
         listener: Arc<dyn up_rust::UListener>,
     ) -> Result<(), UStatus> {
-        let mut topic_listener_map = self.topic_listener_map.write().await;
+        let comp_listener = ComparableListener::new(listener);
+        let mut topic_listener_map = self.topic_listeners.write().await;
 
-        if !topic_listener_map.contains_key(topic) {
-            let id = self.get_free_subscription_id().await?;
-            let mut subscription_topic_map = self.subscription_topic_map.write().await;
-            subscription_topic_map.insert(id, topic.to_string());
+        if let Some(listeners) = topic_listener_map.get_mut(topic_filter) {
+            debug!("adding listener to existing subscription");
+            listeners.insert(comp_listener);
+        } else {
+            let mut listeners = HashSet::new();
+            listeners.insert(comp_listener);
+            topic_listener_map.insert(topic_filter, listeners);
+
+            let subscription_id = self.get_free_subscription_id().await?;
+            let mut subscription_topic_map = self.subscription_topics.write().await;
+            subscription_topic_map.insert(subscription_id, topic_filter.to_string());
             // Subscribe to topic.
-            if let Err(sub_err) = self.mqtt_client.subscribe(topic, id).await {
+            if let Err(sub_err) = self
+                .mqtt_client
+                .subscribe(topic_filter, subscription_id)
+                .await
+            {
                 // If subscribe fails, add subscription id back to free subscription ids.
-                self.add_free_subscription_id(id).await;
+                self.release_subscription_id(subscription_id).await;
+                topic_listener_map.remove(topic_filter);
+                debug!("failed to create new subscription for listener");
                 return Err(sub_err);
+            } else {
+                debug!(
+                    "created new subscription [id: {}] for listener",
+                    subscription_id
+                );
             };
         }
-
-        let listeners = topic_listener_map
-            .entry(topic.to_string())
-            .or_insert(HashSet::new());
-
-        // Add listener to hash set.
-        let comp_listener = ComparableListener::new(listener);
-        listeners.insert(comp_listener);
-        debug!("Added listener for MQTT topic: {}", topic);
-
         Ok(())
     }
 
-    /// Remove a UListener from an mqtt topic.
+    /// Removes a listener for an MQTT topic filter.
     ///
     /// # Arguments
-    /// * `topic` - Topic to remove the listener from.
+    /// * `topic_filter` - The topic filter to remove the listener for.
     /// * `listener` - Listener to remove from the topic subscription list.
     async fn remove_listener(
         &self,
-        topic: &str,
+        topic_filter: &str,
         listener: Arc<dyn up_rust::UListener>,
     ) -> Result<(), UStatus> {
-        let mut topic_listener_map = self.topic_listener_map.write().await;
-        let mut subscription_topic_map = self.subscription_topic_map.write().await;
+        let mut topic_listener_map = self.topic_listeners.write().await;
 
-        if !topic_listener_map.contains_key(topic) {
+        let Some(listeners) = topic_listener_map.get_mut(topic_filter) else {
             return Err(UStatus::fail_with_code(
                 UCode::NOT_FOUND,
-                format!("Topic '{topic}' is not registered."),
+                format!("No listeners registered for topic filter [{topic_filter}]."),
             ));
-        }
+        };
 
-        topic_listener_map
-            .entry(topic.to_string())
-            .and_modify(|listeners| {
-                // Remove listener from hash set.
-                let comp_listener = ComparableListener::new(listener);
-                listeners.remove(&comp_listener);
-            });
+        let comp_listener = ComparableListener::new(listener);
+        listeners.remove(&comp_listener);
 
-        // Remove topic if no listeners are left.
-        if topic_listener_map.get(topic).unwrap().is_empty() {
-            let sub_id = subscription_topic_map.iter_mut().find_map(|(k, v)| {
-                if v == topic {
-                    Some(*k)
-                } else {
-                    None
-                }
-            });
-
-            if let Some(sub_id) = sub_id {
-                // Remove subscription id from map.
-                subscription_topic_map.remove(&sub_id);
-
-                // Add subscription id back to free subscription ids.
-                self.add_free_subscription_id(sub_id).await;
-            }
-
-            topic_listener_map.remove(topic);
-
+        if listeners.is_empty() {
             // Unsubscribe from topic.
-            self.mqtt_client.unsubscribe(topic).await?;
+            if let Err(e) = self.mqtt_client.unsubscribe(topic_filter).await {
+                return Err(e);
+            } else {
+                // remove topic filter
+                topic_listener_map.remove(topic_filter);
+
+                let mut subscription_topic_map = self.subscription_topics.write().await;
+                if let Some(sub_id) = subscription_topic_map.iter().find_map(|(k, v)| {
+                    if v == topic_filter {
+                        Some(*k)
+                    } else {
+                        None
+                    }
+                }) {
+                    // remove mapping of subscription id to topic filter
+                    subscription_topic_map.remove(&sub_id);
+
+                    // and release subscription id
+                    self.release_subscription_id(sub_id).await;
+                }
+            }
         }
 
         Ok(())
@@ -499,611 +484,24 @@ impl Mqtt5Transport {
     }
 }
 
-// Push a user property from UAttributes to the MQTT Properties
-fn push_user_property(
-    properties: &mut mqtt::Properties,
-    code: &str,
-    value: &str,
-    error_message: &str,
-) -> Result<(), UStatus> {
-    properties
-        .push_string_pair(mqtt::PropertyCode::UserProperty, code, value)
-        .map_err(|e| {
-            UStatus::fail_with_code(UCode::INTERNAL, format!("{error_message}, err: {e:?}"))
-        })
-}
-
-/// Create mqtt header properties from UAttributes information.
-/// The Message Expiry Interval gets mapped to the TTL MQTT property.
-/// An optional UAttribute that is None gets mapped as None.
-/// A mandatory UAttribue that has the default value gets mapped to None.
-///
-/// # Arguments
-/// * `attributes` - UAttributes to create properties from.
-fn create_mqtt_properties_from_uattributes(
-    attributes: &UAttributes,
-) -> Result<mqtt::Properties, UStatus> {
-    let mut properties = mqtt::Properties::new();
-
-    // Validate UAttributes before conversion.
-    UAttributesValidators::get_validator_for_attributes(attributes)
-        .validate(attributes)
-        .map_err(|e| {
-            UStatus::fail_with_code(UCode::INTERNAL, format!("Invalid uAttributes, err: {e:?}"))
-        })?;
-
-    // Add ttl to properties as message expiry time
-    if let Some(message_expiry_interval) = attributes.ttl {
-        properties
-            .push_u32(
-                mqtt::PropertyCode::MessageExpiryInterval,
-                message_expiry_interval,
-            )
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to create message expiry interval property, err: {e:?}"),
-                )
-            })?;
-    }
-
-    // Add uAttributes version number to user properties.
-    push_user_property(
-        &mut properties,
-        "0",
-        "1",
-        "Unable to add uAttributes Version to mqtt User Properties",
-    )?;
-
-    // Add message ID as user property 1
-    push_user_property(
-        &mut properties,
-        "1",
-        &attributes.id.to_hyphenated_string(),
-        "Unable to add message ID to mqtt User Properties",
-    )?;
-
-    // Add message type as user property 2
-    push_user_property(
-        &mut properties,
-        "2",
-        &attributes.type_.value().to_string(),
-        "Unable to add message type to mqtt User Properties",
-    )?;
-
-    // Add message source as user property 3
-    if let Some(source) = attributes.source.to_owned().into_option() {
-        push_user_property(
-            &mut properties,
-            "3",
-            &source.to_uri(false),
-            "Unable to add message source to mqtt User Properties",
-        )?;
-    };
-
-    // Add message sink as user property 4
-    if let Some(sink) = attributes.sink.to_owned().into_option() {
-        push_user_property(
-            &mut properties,
-            "4",
-            &sink.to_uri(false),
-            "Unable to add message sink to mqtt User Properties",
-        )?
-    };
-
-    // Add message priority as user property 5 (map 0 => None)
-    if attributes.priority.value() != 0 {
-        push_user_property(
-            &mut properties,
-            "5",
-            &attributes.priority.value().to_string(),
-            "Unable to add message priority to mqtt User Properties",
-        )?
-    };
-
-    // Add message permission level as user property 7 (optional)
-    if let Some(permission_level) = &attributes.permission_level {
-        push_user_property(
-            &mut properties,
-            "7",
-            &permission_level.to_string(),
-            "Unable to add message permission level to mqtt User Properties",
-        )?;
-    }
-
-    // Add message comm Status as user property 8 (optional)
-    if let Some(comm_status) = &attributes.commstatus {
-        push_user_property(
-            &mut properties,
-            "8",
-            &comm_status.value().to_string(),
-            "Unable to add message comm status to mqtt User Properties",
-        )?;
-    }
-
-    // Add message reqId as user property 9 (map "00000000-0000-0000-0000-000000000000" => None)
-    if let Some(req_id) = attributes.reqid.to_owned().into_option() {
-        push_user_property(
-            &mut properties,
-            "9",
-            &req_id.to_hyphenated_string(),
-            "Unable to add message reqId to mqtt User Properties",
-        )?;
-    }
-
-    // Add message token as user property 10 (optional)
-    if let Some(token) = &attributes.token {
-        push_user_property(
-            &mut properties,
-            "10",
-            token,
-            "Unable to add message token to mqtt User Properties",
-        )?;
-    }
-
-    // Add message traceparent as user property 11 (optional)
-    if let Some(traceparent) = &attributes.traceparent {
-        push_user_property(
-            &mut properties,
-            "11",
-            traceparent,
-            "Unable to add message traceparent to mqtt User Properties",
-        )?;
-    }
-
-    // Add message payload format as user property 12
-    if attributes.payload_format.value() != 0 {
-        push_user_property(
-            &mut properties,
-            "12",
-            &attributes.payload_format.value().to_string(),
-            "Unable to add message payload format to mqtt User Properties",
-        )?;
-    }
-
-    Ok(properties)
-}
-
-/// Get UAttributes from mqtt header properties.
-///
-/// # Arguments
-/// * `props` - Mqtt properties to get UAttributes from.
-fn get_uattributes_from_mqtt_properties(props: &mqtt::Properties) -> Result<UAttributes, UStatus> {
-    let mut attributes = UAttributes::default();
-
-    // Add the TTL UAttribute from the MessageExpiryInterval if available
-    if let Some(ttl) = props.get(paho_mqtt::PropertyCode::MessageExpiryInterval) {
-        attributes.ttl = ttl.get()
-    }
-
-    // Add UserProperty 1 to UAttributes as Message ID
-    if let Some(message_id) = props.find_user_property("1") {
-        let id = UUID::from_str(&message_id).map_err(|_| {
-            UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 1 to Message ID",
-            )
-        })?;
-        attributes.id = MessageField::from(Some(id));
-    };
-
-    // Add UserProperty 2 to UAttributes as Message Type
-    if let Some(message_type_str) = props.find_user_property("2") {
-        let result = message_type_str
-            .parse::<i32>()
-            .ok()
-            .and_then(UMessageType::from_i32)
-            .map(EnumOrUnknown::from);
-
-        if let Some(message_type) = result {
-            attributes.type_ = message_type;
-        } else {
-            return Err(UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 2 to Message Type".to_string(),
-            ));
-        }
-    }
-
-    // Add UserProperty 3 to UAttributes as Message Source
-    if let Some(source_string) = props.find_user_property("3") {
-        let source = UUri::from_str(&source_string).map_err(|_| {
-            UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 3 to Message Source",
-            )
-        })?;
-        attributes.source = MessageField::from(Some(source));
-    };
-
-    // Add UserProperty 4 to UAttributes as Message Sink
-    if let Some(sink_string) = props.find_user_property("4") {
-        let sink = UUri::from_str(&sink_string).map_err(|_| {
-            UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 4 to Message Sink",
-            )
-        })?;
-        attributes.sink = MessageField::from(Some(sink));
-    };
-
-    // Add UserProperty 5 to UAttributes as Priority
-    if let Some(priority_string) = props.find_user_property("5") {
-        let result = priority_string
-            .parse::<i32>()
-            .ok()
-            .and_then(UPriority::from_i32)
-            .map(EnumOrUnknown::from);
-
-        if let Some(priority) = result {
-            attributes.priority = priority;
-        } else {
-            return Err(UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 2 to Message Type".to_string(),
-            ));
-        }
-    }
-
-    // Add UserProperty 7 to UAttributes as Permission Level
-    if let Some(permission_string) = props.find_user_property("7") {
-        let permission: u32 = permission_string.parse().map_err(|_| {
-            UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 7 to Permission Level",
-            )
-        })?;
-        attributes.permission_level = Some(permission);
-    };
-
-    // Add UserProperty 8 to UAttributes as CommStatus
-    if let Some(comm_status_string) = props.find_user_property("8") {
-        let comm_status_int = comm_status_string.parse::<i32>().map_err(|_| {
-            UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 8 to CommStatus",
-            )
-        })?;
-
-        let comm_status = UCode::from_i32(comm_status_int).ok_or_else(|| {
-            UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 8 to CommStatus",
-            )
-        })?;
-
-        attributes.commstatus = Some(EnumOrUnknown::from(comm_status));
-    }
-
-    // Add UserProperty 9 to UAttributes as Request ID
-    if let Some(req_id) = props.find_user_property("9") {
-        let id = UUID::from_str(&req_id).map_err(|_| {
-            UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 9 to Request ID",
-            )
-        })?;
-        attributes.reqid = MessageField::from(Some(id));
-    };
-
-    // Add UserProperty 10 to UAttributes as Token
-    if let Some(token) = props.find_user_property("10") {
-        attributes.token = Some(token);
-    };
-
-    // Add UserProperty 11 to UAttributes as Traceparent
-    if let Some(traceparent) = props.find_user_property("11") {
-        attributes.traceparent = Some(traceparent);
-    };
-
-    // Add UserProperty 12 to UAttributes as Payload Format
-    if let Some(payload_format_string) = props.find_user_property("12") {
-        let result = payload_format_string
-            .parse::<i32>()
-            .ok()
-            .and_then(UPayloadFormat::from_i32)
-            .map(EnumOrUnknown::from);
-
-        if let Some(payload_format) = result {
-            attributes.payload_format = payload_format;
-        } else {
-            return Err(UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Unable to map UserProperty 2 to Message Type".to_string(),
-            ));
-        }
-    }
-
-    // Validate the reconstructed attributes
-    UAttributesValidators::get_validator_for_attributes(&attributes)
-        .validate(&attributes)
-        .map_err(|e| {
-            UStatus::fail_with_code(
-                UCode::INTERNAL,
-                format!("Unable to construct uAttributes, err: {e:?}"),
-            )
-        })?;
-
-    Ok(attributes)
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
     use mqtt_client::MockMqttClientOperations;
-    use protobuf::Enum;
-    use up_rust::{MockUListener, UMessageType, UPayloadFormat, UPriority, UUID};
+    use paho_mqtt::TopicMatcher;
+    use up_rust::MockUListener;
 
     use test_case::test_case;
 
     use super::*;
 
-    /// Constants defining the protobuf field numbers for UAttributes.
-    pub const ID_NUM: &str = "1";
-    pub const TYPE_NUM: &str = "2";
-    pub const SOURCE_NUM: &str = "3";
-    pub const SINK_NUM: &str = "4";
-    pub const PRIORITY_NUM: &str = "5";
-    pub const PERM_LEVEL_NUM: &str = "7";
-    pub const COMMSTATUS_NUM: &str = "8";
-    pub const REQID_NUM: &str = "9";
-    pub const TOKEN_NUM: &str = "10";
-    pub const TRACEPARENT_NUM: &str = "11";
-    pub const PAYLOAD_NUM: &str = "12";
-
-    // Helper function used to create a UAttributes object and mqtt properties object for testing and comparison.
-    #[allow(clippy::too_many_arguments)]
-    fn create_test_uattributes_and_properties(
-        id: Option<UUID>,
-        type_: Option<UMessageType>,
-        source: Option<&str>,
-        sink: Option<&str>,
-        priority: Option<UPriority>,
-        ttl: Option<u32>,
-        perm_level: Option<u32>,
-        commstatus: Option<UCode>,
-        reqid: Option<UUID>,
-        token: Option<&str>,
-        traceparent: Option<&str>,
-        payload_format: Option<UPayloadFormat>,
-    ) -> (UAttributes, mqtt::Properties) {
-        let uattributes = create_uattributes(
-            id.clone(),
-            type_,
-            source,
-            sink,
-            priority,
-            ttl,
-            perm_level,
-            commstatus,
-            reqid.clone(),
-            token,
-            traceparent,
-            payload_format,
-        );
-
-        let properties = create_mqtt_properties(
-            id,
-            type_,
-            source,
-            sink,
-            priority,
-            ttl,
-            perm_level,
-            commstatus,
-            reqid,
-            token,
-            traceparent,
-            payload_format,
-        );
-
-        (uattributes, properties)
-    }
-
-    // Helper function to construct UAttributes object for testing.
-    #[allow(clippy::too_many_arguments)]
-    fn create_uattributes(
-        id: Option<UUID>,
-        type_: Option<UMessageType>,
-        source: Option<&str>,
-        sink: Option<&str>,
-        priority: Option<UPriority>,
-        ttl: Option<u32>,
-        perm_level: Option<u32>,
-        commstatus: Option<UCode>,
-        reqid: Option<UUID>,
-        token: Option<&str>,
-        traceparent: Option<&str>,
-        payload_format: Option<UPayloadFormat>,
-    ) -> UAttributes {
-        let mut attributes = UAttributes::default();
-
-        if let Some(id) = id {
-            attributes.id = Some(id).into();
-        }
-
-        if let Some(type_) = type_ {
-            attributes.type_ = type_.into();
-        }
-
-        if let Some(source) = source {
-            attributes.source =
-                Some(UUri::from_str(source).expect("expected valid source UUri string.")).into();
-        }
-
-        if let Some(sink) = sink {
-            attributes.sink =
-                Some(UUri::from_str(sink).expect("expected valid sink UUri string.")).into();
-        }
-
-        if let Some(priority) = priority {
-            attributes.priority = priority.into();
-        }
-
-        if let Some(ttl) = ttl {
-            attributes.ttl = Some(ttl);
-        }
-
-        if let Some(perm_level) = perm_level {
-            attributes.permission_level = Some(perm_level);
-        }
-
-        if let Some(commstatus) = commstatus {
-            attributes.commstatus = Some(commstatus.into());
-        }
-
-        if let Some(reqid) = reqid {
-            attributes.reqid = Some(reqid).into();
-        }
-
-        if let Some(token) = token {
-            attributes.token = Some(token.to_string());
-        }
-
-        if let Some(traceparent) = traceparent {
-            attributes.traceparent = Some(traceparent.to_string());
-        }
-
-        if let Some(payload_format) = payload_format {
-            attributes.payload_format = payload_format.into();
-        }
-
-        attributes
-    }
-
-    // Helper function to create mqtt properties for testing.
-    #[allow(clippy::too_many_arguments)]
-    fn create_mqtt_properties(
-        id: Option<UUID>,
-        type_: Option<UMessageType>,
-        source: Option<&str>,
-        sink: Option<&str>,
-        priority: Option<UPriority>,
-        ttl: Option<u32>,
-        perm_level: Option<u32>,
-        commstatus: Option<UCode>,
-        reqid: Option<UUID>,
-        token: Option<&str>,
-        traceparent: Option<&str>,
-        payload_format: Option<UPayloadFormat>,
-    ) -> mqtt::Properties {
-        let mut properties = mqtt::Properties::new();
-
-        // Add TTL as MQTT MessageExpiryInterval
-        if let Some(message_expiry_interval) = ttl {
-            properties
-                .push_u32(
-                    mqtt::PropertyCode::MessageExpiryInterval,
-                    message_expiry_interval,
-                )
-                .unwrap();
-        }
-
-        // Add uAttributes version number.
-        properties
-            .push_string_pair(mqtt::PropertyCode::UserProperty, "0", "1")
-            .unwrap();
-
-        if let Some(id_val) = id {
-            properties
-                .push_string_pair(
-                    mqtt::PropertyCode::UserProperty,
-                    ID_NUM,
-                    &id_val.to_hyphenated_string(),
-                )
-                .unwrap();
-        }
-
-        // Add the remaining attributes as MQTT UserProperties
-        if let Some(type_val) = type_ {
-            properties
-                .push_string_pair(
-                    mqtt::PropertyCode::UserProperty,
-                    TYPE_NUM,
-                    &type_val.value().to_string(),
-                )
-                .unwrap();
-        }
-        if let Some(source_val) = source {
-            properties
-                .push_string_pair(mqtt::PropertyCode::UserProperty, SOURCE_NUM, source_val)
-                .unwrap();
-        }
-        if let Some(sink_val) = sink {
-            properties
-                .push_string_pair(mqtt::PropertyCode::UserProperty, SINK_NUM, sink_val)
-                .unwrap();
-        }
-        if let Some(priority_val) = priority {
-            properties
-                .push_string_pair(
-                    mqtt::PropertyCode::UserProperty,
-                    PRIORITY_NUM,
-                    &priority_val.value().to_string(),
-                )
-                .unwrap();
-        }
-        if let Some(perm_level_val) = perm_level {
-            properties
-                .push_string_pair(
-                    mqtt::PropertyCode::UserProperty,
-                    PERM_LEVEL_NUM,
-                    &perm_level_val.to_string(),
-                )
-                .unwrap();
-        }
-        if let Some(commstatus_val) = commstatus {
-            properties
-                .push_string_pair(
-                    mqtt::PropertyCode::UserProperty,
-                    COMMSTATUS_NUM,
-                    &commstatus_val.value().to_string(),
-                )
-                .unwrap();
-        }
-        if let Some(reqid_val) = reqid {
-            properties
-                .push_string_pair(
-                    mqtt::PropertyCode::UserProperty,
-                    REQID_NUM,
-                    &reqid_val.to_hyphenated_string(),
-                )
-                .unwrap();
-        }
-        if let Some(token_val) = token {
-            properties
-                .push_string_pair(mqtt::PropertyCode::UserProperty, TOKEN_NUM, token_val)
-                .unwrap();
-        }
-        if let Some(traceparent_val) = traceparent {
-            properties
-                .push_string_pair(
-                    mqtt::PropertyCode::UserProperty,
-                    TRACEPARENT_NUM,
-                    traceparent_val,
-                )
-                .unwrap();
-        }
-        if let Some(payload_format_val) = payload_format {
-            properties
-                .push_string_pair(
-                    mqtt::PropertyCode::UserProperty,
-                    PAYLOAD_NUM,
-                    &payload_format_val.value().to_string(),
-                )
-                .unwrap();
-        }
-
-        properties
-    }
-
     #[tokio::test]
     async fn test_get_free_subscription_id() {
         let up_client = Mqtt5Transport {
             mqtt_client: Box::new(MockMqttClientOperations::new()),
-            subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
-            topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
+            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
+            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..3).collect())),
@@ -1142,8 +540,8 @@ mod tests {
     async fn test_add_free_subscription_id() {
         let up_client = Mqtt5Transport {
             mqtt_client: Box::new(MockMqttClientOperations::new()),
-            subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
-            topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
+            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
+            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..3).collect())),
@@ -1152,7 +550,7 @@ mod tests {
 
         let expected_id = 7;
 
-        up_client.add_free_subscription_id(expected_id).await;
+        up_client.release_subscription_id(expected_id).await;
 
         let free_ids = up_client.free_subscription_ids.read().await;
 
@@ -1164,7 +562,7 @@ mod tests {
         let listener = Arc::new(MockUListener::new());
         let expected_listener = ComparableListener::new(listener.clone());
         let sub_map = Arc::new(RwLock::new(HashMap::new()));
-        let topic_map = Arc::new(RwLock::new(HashMap::new()));
+        let topic_listeners = Arc::new(RwLock::new(TopicMatcher::new()));
         let mut client_operations = MockMqttClientOperations::new();
         client_operations
             .expect_subscribe()
@@ -1173,26 +571,27 @@ mod tests {
 
         let up_client = Mqtt5Transport {
             mqtt_client: Box::new(client_operations),
-            subscription_topic_map: sub_map.clone(),
-            topic_listener_map: topic_map.clone(),
+            subscription_topics: sub_map.clone(),
+            topic_listeners: topic_listeners.clone(),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
             message_callback_handle: None,
         };
 
-        assert!(topic_map.read().await.is_empty());
+        assert!(topic_listeners.read().await.is_empty());
 
         let result = up_client.add_listener("test_topic", listener.clone()).await;
 
         assert!(result.is_ok());
 
-        let actual_topic_map = topic_map.read().await;
+        let actual_topic_map = topic_listeners.read().await;
 
-        assert!(actual_topic_map.contains_key("test_topic"));
-        let actual_listeners = actual_topic_map.get("test_topic").unwrap();
-        assert_eq!(actual_listeners.len(), 1);
-        assert!(actual_listeners.contains(&expected_listener));
+        assert!(actual_topic_map
+            .get("test_topic")
+            .is_some_and(|actual_listeners| {
+                actual_listeners.len() == 1 && actual_listeners.contains(&expected_listener)
+            }));
     }
 
     #[tokio::test]
@@ -1202,7 +601,7 @@ mod tests {
         let listener_2 = Arc::new(MockUListener::new());
         let comparable_listener_2 = ComparableListener::new(listener_2.clone());
         let sub_map = Arc::new(RwLock::new(HashMap::new()));
-        let topic_map = Arc::new(RwLock::new(HashMap::new()));
+        let topic_map = Arc::new(RwLock::new(TopicMatcher::new()));
 
         topic_map.write().await.insert(
             "test_topic".to_string(),
@@ -1217,8 +616,8 @@ mod tests {
 
         let up_client = Mqtt5Transport {
             mqtt_client: Box::new(client_operations),
-            subscription_topic_map: sub_map.clone(),
-            topic_listener_map: topic_map.clone(),
+            subscription_topics: sub_map.clone(),
+            topic_listeners: topic_map.clone(),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
@@ -1236,11 +635,13 @@ mod tests {
         {
             let actual_topic_map = topic_map.read().await;
 
-            assert!(actual_topic_map.contains_key("test_topic"));
-            let actual_listeners = actual_topic_map.get("test_topic").unwrap();
-            assert_eq!(actual_listeners.len(), 1);
-            assert!(!actual_listeners.contains(&comparable_listener_1));
-            assert!(actual_listeners.contains(&comparable_listener_2));
+            assert!(actual_topic_map
+                .get("test_topic")
+                .is_some_and(|actual_listeners| {
+                    actual_listeners.len() == 1
+                        && !actual_listeners.contains(&comparable_listener_1)
+                        && actual_listeners.contains(&comparable_listener_2)
+                }));
         }
 
         let result = up_client
@@ -1248,7 +649,7 @@ mod tests {
             .await;
 
         assert!(result.is_ok());
-        assert!(topic_map.read().await.is_empty());
+        assert!(topic_map.read().await.get("test_topic").is_none());
 
         let result = up_client
             .remove_listener("test_topic", listener_2.clone())
@@ -1256,162 +657,6 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.err().unwrap().code == UCode::NOT_FOUND.into());
-    }
-
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_PUBLISH),
-            Some("//VIN.vehicles/A8000/2/8A50"),
-            None, None, None, None, None, None, None, None, None
-        ),
-        4,
-        None;
-        "Publish success"
-    )]
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_NOTIFICATION),
-            Some("//VIN.vehicles/A8000/2/1A50"),
-            Some("//VIN.vehicles/B8000/3/0"),
-            None, None, None, None, None, None, None, None
-        ),
-        5,
-        None;
-        "Notification success"
-    )]
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_REQUEST),
-            Some("//VIN.vehicles/A8000/2/0"),
-            Some("//VIN.vehicles/B8000/3/1B50"),
-            Some(UPriority::UPRIORITY_CS4),
-            Some(3600),
-            None, None, None, None, None, None
-        ),
-        7,
-        None;
-        "Request success"
-    )]
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_RESPONSE),
-            Some("//VIN.vehicles/B8000/3/1B50"),
-            Some("//VIN.vehicles/A8000/2/0"),
-            Some(UPriority::UPRIORITY_CS4),
-            None, None, None,
-            Some(UUID::build()),
-            None, None, None
-        ),
-        7,
-        None;
-        "Response success"
-    )]
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_PUBLISH),
-            Some("//VIN.vehicles/A8000/2/1A50"),
-            None, None, None, None, None, None, None, None, None
-        ),
-        4,
-        Some(UStatus::fail_with_code(UCode::INTERNAL, "Invalid uAttributes, err: ValidationError(\"Validation failure: Invalid source URI: Validation error: Resource ID must be >= 0x8000\")".to_string()));
-        "Publish failure with validation error"
-    )]
-    fn test_create_mqtt_properties_from_uattributes(
-        (attributes, properties): (UAttributes, mqtt::Properties),
-        expected_attributes_num: usize,
-        expected_error: Option<UStatus>,
-    ) {
-        let props = create_mqtt_properties_from_uattributes(&attributes);
-
-        // Check if properties could be created at all
-        if props.is_ok() {
-            let constructed_props = props.unwrap();
-            assert_eq!(constructed_props.len(), expected_attributes_num);
-            // Iterate over all created properties and compare with the expected properties
-            constructed_props.user_iter().for_each(|(key, value)| {
-                let expected_prop = properties.find_user_property(&key);
-                assert_eq!(Some(value), expected_prop);
-            });
-        } else {
-            assert_eq!(props.err(), expected_error);
-        }
-    }
-
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_PUBLISH),
-            Some("//VIN.vehicles/A8000/2/8A50"),
-            None, None, None, None, None, None, None, None, None
-        ),
-        None;
-        "Publish success"
-    )]
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_NOTIFICATION),
-            Some("//VIN.vehicles/A8000/2/1A50"),
-            Some("//VIN.vehicles/B8000/3/0"),
-            None, None, None, None, None, None, None, None
-        ),
-        None;
-        "Notification success"
-    )]
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_REQUEST),
-            Some("//VIN.vehicles/A8000/2/0"),
-            Some("//VIN.vehicles/B8000/3/1B50"),
-            Some(UPriority::UPRIORITY_CS4),
-            Some(3600),
-            None, None, None, None, None, None
-        ),
-        None;
-        "Request success"
-    )]
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_RESPONSE),
-            Some("//VIN.vehicles/B8000/3/1B50"),
-            Some("//VIN.vehicles/A8000/2/0"),
-            Some(UPriority::UPRIORITY_CS4),
-            None, None, None,
-            Some(UUID::build()),
-            None, None, None
-        ),
-        None;
-        "Response success"
-    )]
-    #[test_case(
-        create_test_uattributes_and_properties(
-            Some(UUID::build()),
-            Some(UMessageType::UMESSAGE_TYPE_PUBLISH),
-            Some("//VIN.vehicles/A8000/2/1A50"),
-            None, None, None, None, None, None, None, None, None
-        ),
-        Some(UStatus::fail_with_code(UCode::INTERNAL, "Unable to construct uAttributes, err: ValidationError(\"Validation failure: Invalid source URI: Validation error: Resource ID must be >= 0x8000\")".to_string()));
-        "Publish failure with validation error"
-    )]
-    fn test_get_uattributes_from_mqtt_properties(
-        (attributes, properties): (UAttributes, mqtt::Properties),
-        expected_error: Option<UStatus>,
-    ) {
-        let attributes_result = get_uattributes_from_mqtt_properties(&properties);
-
-        if attributes_result.is_ok() {
-            let actual_attributes = attributes_result.unwrap();
-            assert_eq!(actual_attributes, attributes);
-        } else {
-            assert_eq!(attributes_result.err(), expected_error);
-        }
     }
 
     #[test_case(
@@ -1565,16 +810,5 @@ mod tests {
         assert!(mode
             .to_mqtt_topic(&src_uri, sink_uri.as_ref(), "local_authority")
             .is_ok_and(|topic| topic == expected_topic));
-    }
-
-    #[test_case("VIN.vehicles/A8000/2/8A50", "VIN.vehicles/A8000/2/8A50", true; "Exact match")]
-    #[test_case("VIN.vehicles/A8000/2/8A50", "+/+/+/+", true; "Wildcard pattern")]
-    #[test_case("VIN.vehicles/A8000/2/8A50", "VIN.vehicles/B8000/2/8A50", false; "Mismatched entity id")]
-    #[test_case("VIN.vehicles/A8000/2/8A50", "+/A8000/2/8A50", true; "Single wildcard matchs")]
-    fn test_compare_topic(topic: &str, pattern: &str, expected_result: bool) {
-        assert_eq!(
-            Mqtt5Transport::compare_topic(topic, pattern),
-            expected_result
-        );
     }
 }
