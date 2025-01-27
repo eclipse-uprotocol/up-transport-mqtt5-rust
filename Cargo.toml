@@ -39,8 +39,8 @@ cli = ["clap"]
 [dependencies]
 async-channel = { version = "1.6" }
 async-trait = { version = "0.1" }
-bytes = { version = "1.5" }
-clap = { version = "4.4", features = [
+bytes = { version = "1.7" }
+clap = { version = "4.5", features = [
     "std",
     "derive",
     "env",
@@ -52,7 +52,7 @@ clap = { version = "4.4", features = [
 ], optional = true }
 futures = { version = "0.3" }
 log = { version = "0.4" }
-paho-mqtt = { version = "0.12.3", features = ["vendored-ssl"] }
+paho-mqtt = { version = "0.13.0", features = ["vendored-ssl"] }
 protobuf = { version = "3.3" }
 tokio = { version = "1.38", features = ["full"] }
 up-rust = { version = "0.4.0", default-features = false }
