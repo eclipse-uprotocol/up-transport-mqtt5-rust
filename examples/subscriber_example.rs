@@ -19,7 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use clap::{command, Parser};
-use log::info;
+use log::{error, info};
 use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
 use up_transport_mqtt5::{Mqtt5Transport, MqttClientOptions, TransportMode};
 
@@ -58,7 +58,14 @@ async fn main() -> Result<(), UStatus> {
     )
     .await?;
 
-    client.connect().await?;
+    backoff::future::retry(backoff::ExponentialBackoff::default(), || async {
+        info!("Connecting to broker...");
+        Ok(client
+            .connect()
+            .await
+            .inspect_err(|err| error!("Connection attempt failed: {err}"))?)
+    })
+    .await?;
 
     let listener = Arc::new(LoggingListener {});
 

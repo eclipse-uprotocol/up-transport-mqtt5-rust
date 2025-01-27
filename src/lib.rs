@@ -17,7 +17,7 @@ use async_channel::Receiver;
 use bytes::Bytes;
 use futures::stream::StreamExt;
 use listener_registry::{RegisteredListeners, SubscriptionIdentifier};
-use log::{debug, trace};
+use log::debug;
 use mqtt_client::MqttClientOperations;
 pub use mqtt_client::{MqttClientOptions, SslOptions};
 use paho_mqtt::{self as mqtt, Message, QOS_1};
@@ -173,8 +173,10 @@ impl Mqtt5Transport {
         )));
 
         // Create the MQTT client
-        let mut client_operations =
-            mqtt_client::PahoBasedMqttClientOperations::new_client(options)?;
+        let mut client_operations = mqtt_client::PahoBasedMqttClientOperations::new_client(
+            options,
+            registered_listeners.clone(),
+        )?;
         let inbound_message_stream = client_operations.get_message_stream()?;
         let mqtt_client = Arc::new(client_operations);
 
@@ -182,6 +184,7 @@ impl Mqtt5Transport {
         let message_callback_handle = Some(Self::create_cb_message_handler(
             registered_listeners.clone(),
             inbound_message_stream,
+            mqtt_client.clone(),
         ));
 
         Ok(Self {
@@ -213,12 +216,13 @@ impl Mqtt5Transport {
     }
 
     /// Stops processing of incoming messages.
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         if let Some(cb_message_handle) = self.message_callback_handle.as_ref() {
             cb_message_handle.abort();
         }
-        self.mqtt_client.disconnect()
-        // TODO: clean up subscription state
+        self.mqtt_client.disconnect();
+        let mut registered_listeners_write = self.registered_listeners.write().await;
+        registered_listeners_write.clear();
     }
 
     /// Creates a callback message handler that listens for incoming messages and notifies listeners asynchronously.
@@ -227,15 +231,18 @@ impl Mqtt5Transport {
     /// * `subscription_topics` - Map of subscription identifiers to subscribed topic filters.
     /// * `topic_listeners` - Map of topic filters to listeners.
     /// * `message_stream` - Stream of incoming MQTT PUBLISH packets.
+    /// * `mqtt_client_operations` - The client to use for interacting with the MQTT broker.
     fn create_cb_message_handler(
         registered_listeners: Arc<RwLock<RegisteredListeners>>,
         mut message_stream: Receiver<Option<Message>>,
+        mqtt_client_operations: Arc<dyn MqttClientOperations>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             while let Some(msg_opt) = message_stream.next().await {
                 let Some(msg) = msg_opt else {
-                    //TODO: None means that the connection is dropped. This should be handled correctly.
-                    trace!("Received empty message from stream.");
+                    // None means that the connection is dropped.
+                    debug!("Lost connection to MQTT broker");
+                    mqtt_client_operations.reconnect().await;
                     continue;
                 };
 
@@ -686,6 +693,6 @@ mod tests {
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
         };
-        client.shutdown();
+        client.shutdown().await;
     }
 }

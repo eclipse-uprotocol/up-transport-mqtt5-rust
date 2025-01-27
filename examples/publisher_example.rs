@@ -44,16 +44,18 @@ async fn main() -> Result<(), UStatus> {
     )
     .await?;
 
-    client.connect().await?;
+    backoff::future::retry(backoff::ExponentialBackoff::default(), || async {
+        Ok(client.connect().await?)
+    })
+    .await?;
 
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let current_time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let message = UMessageBuilder::publish(command.topic.clone())
-            .with_ttl(3600)
+            .with_ttl(1000)
             .build_with_payload(
                 current_time.to_string(),
                 UPayloadFormat::UPAYLOAD_FORMAT_TEXT,
@@ -61,13 +63,17 @@ async fn main() -> Result<(), UStatus> {
             .expect("Failed to build message");
 
         if let Err(e) = client.send(message).await {
-            error!("Failed to publish message: {e}");
+            error!(
+                "Failed to publish message [topic: {}]: {}",
+                command.topic.to_uri(true),
+                e
+            );
         } else {
             info!(
-                "Published message [topic: {}]: {}",
+                "Successfully published message [topic: {}]",
                 command.topic.to_uri(true),
-                current_time,
             );
         }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 }

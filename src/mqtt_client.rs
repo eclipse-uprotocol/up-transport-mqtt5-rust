@@ -12,8 +12,12 @@
  ********************************************************************************/
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
     time::Duration,
 };
 
@@ -23,6 +27,8 @@ use async_trait::async_trait;
 use clap::Args;
 use log::{debug, trace};
 use up_rust::{UCode, UStatus};
+
+use crate::{listener_registry::SubscribedTopicProvider, SubscriptionIdentifier};
 
 #[cfg(feature = "cli")]
 const PARAM_MQTT_BUFFER_SIZE: &str = "mqtt-buffer-size";
@@ -236,6 +242,19 @@ pub(crate) trait MqttClientOperations: Sync + Send {
     /// connect timeout period.
     async fn connect(&self) -> Result<(), UStatus>;
 
+    /// Triggers the reestablishment of a lost connection to the MQTT broker.
+    ///
+    /// If no connection to the broker had been established before, this function does nothing.
+    ///
+    /// Spawns a new task that tries to reestablish the connection using an exponential
+    /// backoff algorithm. This means that the connection may not have been reestablished
+    /// (yet), once the function returns.
+    ///
+    /// Once the connection has been reestablished, all subscriptions that had existed before
+    /// the connection had been lost, will be resumed, either automatically based on a resumed
+    /// session or explicitly by subscribing again to the topics of the registered listeners.
+    async fn reconnect(&self);
+
     /// Disconnects from the broker.
     fn disconnect(&self);
 
@@ -273,6 +292,9 @@ struct ConnectionState {
 pub(crate) struct PahoBasedMqttClientOperations {
     inner_mqtt_client: Arc<paho_mqtt::AsyncClient>,
     inbound_messages: Option<Receiver<Option<paho_mqtt::Message>>>,
+    subscribed_topic_provider: Arc<tokio::sync::RwLock<dyn SubscribedTopicProvider>>,
+    reconnecting: AtomicBool,
+    initial_connection_established: AtomicBool,
     client_options: MqttClientOptions,
 }
 
@@ -295,11 +317,16 @@ impl PahoBasedMqttClientOperations {
     /// * `options` - Configuration for the MQTT client. These configuration options
     ///               are getting stored with the client and used again when
     ///               reestablishing a lost connection to the broker.
+    /// * `subscribed_topic_provider` - A component that knows about the topic filters for which
+    ///                                 listeners have been registered.
     ///
     /// # Returns
     ///
     /// A newly created MQTT client that is not connected to the broker yet (see `Self::connect`).
-    pub(crate) fn new_client(options: MqttClientOptions) -> Result<Self, UStatus> {
+    pub(crate) fn new_client(
+        options: MqttClientOptions,
+        subscribed_topic_provider: Arc<tokio::sync::RwLock<dyn SubscribedTopicProvider>>,
+    ) -> Result<Self, UStatus> {
         paho_mqtt::CreateOptionsBuilder::new()
             .server_uri(&options.broker_uri)
             .client_id(options.client_id.clone().unwrap_or_default())
@@ -317,6 +344,9 @@ impl PahoBasedMqttClientOperations {
                 Self {
                     inner_mqtt_client: Arc::new(async_client),
                     inbound_messages: Some(inbound_message_stream),
+                    subscribed_topic_provider,
+                    reconnecting: AtomicBool::new(false),
+                    initial_connection_established: AtomicBool::new(false),
                     client_options: options,
                 }
             })
@@ -355,6 +385,32 @@ impl PahoBasedMqttClientOperations {
         false
     }
 
+    fn is_session_present(user_data: &paho_mqtt::UserData) -> bool {
+        if let Some(connection_properties) = user_data.downcast_ref::<RwLock<ConnectionState>>() {
+            if let Ok(props) = connection_properties.read() {
+                return props.session_present;
+            }
+        }
+        false
+    }
+
+    // [impl->req~up-transport-mqtt5-reconnection~1]
+    async fn trigger_reconnect_if_required(&self) {
+        // check if the initial connection to the MQTT broker had been established before
+        let reconnect_required = self.initial_connection_established.load(Ordering::Relaxed);
+        debug!(
+            "Asserting connection to broker [currently connected: {}, reconnect required: {}",
+            self.is_connected(),
+            reconnect_required,
+        );
+        // it is the client code's responsibility to establish the initial connection
+        if !self.is_connected() && reconnect_required {
+            self.reconnect().await;
+        }
+    }
+
+    /// Updates the MQTT client's [user data](`ConnectionState`) with the connection properties
+    /// contained in the CONNACK packet returned by the MQTT broker.
     fn handle_connect_response(user_data: &paho_mqtt::UserData, token: paho_mqtt::ServerResponse) {
         if let Some(connection_properties) = user_data.downcast_ref::<RwLock<ConnectionState>>() {
             if let Ok(mut props) = connection_properties.write() {
@@ -375,6 +431,46 @@ impl PahoBasedMqttClientOperations {
             }
         }
     }
+
+    fn create_subscription_id_properties(
+        id: u16,
+    ) -> Result<paho_mqtt::Properties, paho_mqtt::Error> {
+        let mut properties = paho_mqtt::Properties::new();
+        properties
+            .push_int(paho_mqtt::PropertyCode::SubscriptionIdentifier, id as i32)
+            .inspect_err(|e| {
+                debug!("Failed to create MQTT 5 SubscriptionIdentifier property: {e}")
+            })?;
+        Ok(properties)
+    }
+
+    // [impl->req~up-transport-mqtt5-reconnection~1]
+    async fn recreate_subscriptions(
+        mqtt_client: &paho_mqtt::AsyncClient,
+        subscribed_topics: HashMap<SubscriptionIdentifier, String>,
+    ) {
+        for (subscription_id, topic_filter) in subscribed_topics {
+            // we ignore any potential errors when creating the properties because the worst
+            // thing that can happen is that we subscribe without a subscription identifier
+            // and thus will need to match incoming messages based on the topic only (which we
+            // are prepared to do anyway)
+            let properties = Self::create_subscription_id_properties(subscription_id).ok();
+            if let Err(err) = mqtt_client
+                .subscribe_with_options(&topic_filter, paho_mqtt::QOS_1, None, properties)
+                .await
+            {
+                debug!(
+                    "Failed to recreate subscription [id: {}, topic filter: {}]: {}",
+                    subscription_id, topic_filter, err,
+                );
+            } else {
+                debug!(
+                    "Successfully recreated subscription [id: {}, topic filter: {}]",
+                    subscription_id, topic_filter
+                );
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -386,7 +482,6 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
         let connect_options = paho_mqtt::ConnectOptions::try_from(&self.client_options).map_err(
             |e: paho_mqtt::Error| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()),
         )?;
-
         self.inner_mqtt_client
             .connect(connect_options)
             .await
@@ -394,6 +489,9 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
                 if let Some(user_data) = self.inner_mqtt_client.user_data() {
                     Self::handle_connect_response(user_data, response);
                 }
+                // remember that the initial connection has been established
+                self.initial_connection_established
+                    .store(true, Ordering::Relaxed);
             })
             .map_err(|e| {
                 UStatus::fail_with_code(
@@ -407,50 +505,108 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
         self.inner_mqtt_client.is_connected()
     }
 
+    // [impl->req~up-transport-mqtt5-reconnection~1]
+    async fn reconnect(&self) {
+        if self
+            .reconnecting
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            debug!("Already trying to reestablish connection to MQTT broker");
+            return;
+        }
+
+        let mqtt_client = self.inner_mqtt_client.clone();
+        let topic_provider = self.subscribed_topic_provider.clone();
+
+        let reconnect_outcome = tokio::spawn(async move {
+            let backoff_policy = backoff::ExponentialBackoffBuilder::new()
+                .with_initial_interval(Duration::from_millis(500))
+                .with_multiplier(2.0)
+                .with_randomization_factor(0.2)
+                .with_max_interval(Duration::from_secs(10))
+                .build();
+            match backoff::future::retry(backoff_policy, || async {
+                Ok(mqtt_client.reconnect().await?)
+            })
+            .await
+            {
+                Ok(response) => {
+                    debug!("Successfully reestablished connection to MQTT broker");
+                    if let Some(user_data) = mqtt_client.user_data() {
+                        // this will always be the case because we set the user data during
+                        // construction of the AsyncClient
+                        Self::handle_connect_response(user_data, response);
+                        if !Self::is_session_present(user_data) {
+                            // we only need to manually reestablish the subscriptions if
+                            // the server has not used any session state for the new connection
+                            let subscribed_topics = {
+                                let topic_provider_read = topic_provider.read().await;
+                                topic_provider_read.get_subscribed_topics()
+                            };
+                            Self::recreate_subscriptions(&mqtt_client, subscribed_topics).await;
+                        }
+                    }
+                }
+                Err(err) => {
+                    debug!("Failed to reestablish connection to MQTT broker: {err}");
+                }
+            }
+        });
+        let _ = reconnect_outcome.await;
+        self.reconnecting.store(false, Ordering::Relaxed);
+    }
+
     fn disconnect(&self) {
         let _token = self.inner_mqtt_client.disconnect(None);
+        // make sure that we do not accidentally try to trigger a reconnect
+        self.initial_connection_established
+            .store(false, Ordering::Relaxed);
     }
 
     async fn publish(&self, mqtt_message: paho_mqtt::Message) -> Result<(), UStatus> {
-        self.inner_mqtt_client
-            .publish(mqtt_message)
-            .await
-            .map_err(Self::ustatus_from_paho_error)
-            .map(|_response| Ok(()))?
+        if let Err(err) = self.inner_mqtt_client.publish(mqtt_message).await {
+            self.trigger_reconnect_if_required().await;
+            Err(Self::ustatus_from_paho_error(err))
+        } else {
+            Ok(())
+        }
     }
 
     async fn subscribe(&self, topic: &str, id: u16) -> Result<(), UStatus> {
         let subscription_properties = if self.is_subscription_ids_supported() {
             trace!("Creating subscription [topic: {}, ID: {}]", topic, id);
-            let mut properties = paho_mqtt::Properties::new();
-            properties
-                .push_int(paho_mqtt::PropertyCode::SubscriptionIdentifier, id as i32)
-                .map_err(|err| {
-                    debug!("Failed to create property for subscription identifier: {err}");
-                    UStatus::fail_with_code(
-                        UCode::INTERNAL,
-                        "Failed to create subscription property",
-                    )
-                })?;
-            Some(properties)
+            Some(Self::create_subscription_id_properties(id).map_err(|_e| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Failed to create MQTT5 SubscriptionIdentifier property",
+                )
+            })?)
         } else {
             trace!("Creating subscription [topic: {}]", topic);
             None
         };
 
-        self.inner_mqtt_client
+        if let Err(err) = self
+            .inner_mqtt_client
+            // QOS 1 - Delivered and received at least once
             .subscribe_with_options(topic, paho_mqtt::QOS_1, None, subscription_properties)
             .await
-            .map_err(Self::ustatus_from_paho_error)
-            .map(|_response| Ok(()))?
+        {
+            self.trigger_reconnect_if_required().await;
+            Err(Self::ustatus_from_paho_error(err))
+        } else {
+            Ok(())
+        }
     }
 
     async fn unsubscribe(&self, topic: &str) -> Result<(), UStatus> {
-        self.inner_mqtt_client
-            .unsubscribe(topic)
-            .await
-            .map_err(Self::ustatus_from_paho_error)
-            .map(|_response| Ok(()))?
+        if let Err(err) = self.inner_mqtt_client.unsubscribe(topic).await {
+            self.trigger_reconnect_if_required().await;
+            Err(Self::ustatus_from_paho_error(err))
+        } else {
+            Ok(())
+        }
     }
 }
 

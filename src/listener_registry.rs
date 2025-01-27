@@ -28,17 +28,31 @@ pub(crate) struct RegisteredListeners {
     subscription_topics: SubscriptionTopics,
     /// Mapping of topic filters to listeners.
     topic_listeners: TopicListeners,
+    max_subscriptions: u16,
     /// List of free subscription identifiers to use for the client subscriptions.
     free_subscription_ids: HashSet<SubscriptionIdentifier>,
 }
 
 impl RegisteredListeners {
+    fn new_subscription_ids(size: u16) -> HashSet<SubscriptionIdentifier> {
+        (1..(size) + 1).collect()
+    }
+
     pub(crate) fn new(max_subscriptions: u16) -> Self {
         Self {
             subscription_topics: SubscriptionTopics::new(),
             topic_listeners: TopicListeners::new(),
-            free_subscription_ids: (1..(max_subscriptions) + 1).collect(),
+            max_subscriptions,
+            free_subscription_ids: Self::new_subscription_ids(max_subscriptions),
         }
+    }
+
+    /// Resets this registry to its initial state.
+    /// This includes removing all registered listeners, topic filters and subscription identifiers.
+    pub(crate) fn clear(&mut self) {
+        self.topic_listeners.clear();
+        self.subscription_topics.clear();
+        self.free_subscription_ids = Self::new_subscription_ids(self.max_subscriptions);
     }
 
     fn find_subscription_id(&self, topic_filter: &str) -> Option<SubscriptionIdentifier> {
@@ -205,6 +219,19 @@ impl RegisteredListeners {
             }
         });
         listeners_to_invoke
+    }
+}
+
+pub(crate) trait SubscribedTopicProvider: Send + Sync {
+    fn get_subscribed_topics(&self) -> HashMap<SubscriptionIdentifier, String>;
+}
+
+impl SubscribedTopicProvider for RegisteredListeners {
+    fn get_subscribed_topics(&self) -> HashMap<SubscriptionIdentifier, String> {
+        self.subscription_topics
+            .iter()
+            .map(|(subscription_id, topic_filter)| (*subscription_id, topic_filter.to_owned()))
+            .collect()
     }
 }
 
