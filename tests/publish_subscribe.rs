@@ -21,6 +21,10 @@ async fn test_publish_and_subscribe() {
     let subscriber = common::create_up_transport_mqtt("Subscriber")
         .await
         .expect("failed to create transport at receiving end");
+    subscriber
+        .connect()
+        .await
+        .expect("failed to connect subscriber to broker");
     let source_filter =
         UUri::from_str("//Publisher/A8000/2/FFFF").expect("Failed to create source filter");
     subscriber
@@ -31,6 +35,11 @@ async fn test_publish_and_subscribe() {
     let publisher = common::create_up_transport_mqtt("Publisher")
         .await
         .expect("failed to create transport at sending end");
+    publisher
+        .connect()
+        .await
+        .expect("failed to connect publisher to broker");
+
     let source = UUri::from_str("//Publisher/A8000/2/8A50").unwrap();
     let message_to_send = UMessageBuilder::publish(source)
         .build_with_payload(payload, up_rust::UPayloadFormat::UPAYLOAD_FORMAT_TEXT)

@@ -202,12 +202,50 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_send_fails_if_not_connected() {
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations
+            .expect_publish()
+            .return_const(Err(UStatus::fail_with_code(
+                UCode::UNAVAILABLE,
+                "not connected",
+            )));
+        let client = Mqtt5Transport {
+            mqtt_client: Box::new(client_operations),
+            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
+            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
+            authority_name: "VIN.vehicles".to_string(),
+            mode: TransportMode::InVehicle,
+            free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
+            message_callback_handle: None,
+        };
+
+        let message_to_send = create_test_message(
+            UMessageType::UMESSAGE_TYPE_PUBLISH,
+            "//VIN.vehicles/A8000/2/8A50",
+            None,
+            "hello".to_string(),
+        );
+        assert!(client
+            .send(message_to_send)
+            .await
+            .is_err_and(|err| err.get_code() == UCode::UNAVAILABLE));
+    }
+
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         None,
         "VIN.vehicles/8000/A/2/8A50",
         None;
         "Register listener success"
+    )]
+    #[test_case(
+        "//VIN.vehicles/A8000/2/8A50",
+        None,
+        "VIN.vehicles/8000/A/2/8A50",
+        Some(UCode::UNAVAILABLE);
+        "fails if not connected to broker"
     )]
     #[test_case(
         "//VIN.vehicles/FFFF8000/2/8A50",
@@ -256,17 +294,17 @@ mod tests {
             .register_listener(&source_uri, sink_uri.as_ref(), listener.clone())
             .await;
 
-        if let Some(error_code) = expected_error_code {
-            assert!(send_result.is_err_and(|err| err.get_code() == error_code));
-        } else {
-            assert!(send_result.is_ok());
-        }
-
         let topic_map = client.topic_listeners.read().await;
 
-        assert!(topic_map
-            .get(expected_topic)
-            .is_some_and(|listeners| listeners.contains(&ComparableListener::new(listener))));
+        if let Some(error_code) = expected_error_code {
+            assert!(send_result.is_err_and(|err| err.get_code() == error_code));
+            assert!(topic_map.get(expected_topic).is_none());
+        } else {
+            assert!(send_result.is_ok());
+            assert!(topic_map
+                .get(expected_topic)
+                .is_some_and(|listeners| listeners.contains(&ComparableListener::new(listener))));
+        }
     }
 
     #[test_case(
@@ -275,6 +313,13 @@ mod tests {
         "VIN.vehicles/8000/A/2/8A50",
         None;
         "Unregister listener success"
+    )]
+    #[test_case(
+        "//VIN.vehicles/A8000/2/8A50",
+        None,
+        "VIN.vehicles/8000/A/2/8A50",
+        Some(UCode::UNAVAILABLE);
+        "fails if not connected to broker"
     )]
     #[test_case(
         "//VIN.vehicles/FFFF8000/2/8A50",
@@ -326,25 +371,28 @@ mod tests {
 
         let sink_uri = sink_filter.map(|s| UUri::from_str(s).expect("Expected a valid sink value"));
 
-        let send_result = client
+        let unregister_result = client
             .unregister_listener(&source_uri, sink_uri.as_ref(), listener.clone())
             .await;
 
         if let Some(error_code) = expected_error_code {
-            assert!(send_result.is_err_and(|err| err.get_code() == error_code));
-        } else {
-            assert!(send_result.is_ok());
-        }
-
-        {
+            assert!(unregister_result.is_err_and(|err| err.get_code() == error_code));
             let topic_map = client.topic_listeners.read().await;
-            assert!(topic_map.get(expected_topic).is_none());
+            assert!(topic_map
+                .get(expected_topic)
+                .is_some_and(
+                    |registered_listeners| registered_listeners.contains(&comparable_listener)
+                ));
+        } else {
+            assert!(unregister_result.is_ok());
+            {
+                let topic_map = client.topic_listeners.read().await;
+                assert!(topic_map.get(expected_topic).is_none());
+            }
+            let empty_result = client
+                .unregister_listener(&source_uri, sink_uri.as_ref(), listener.clone())
+                .await;
+            assert!(empty_result.is_err_and(|err| { err.get_code() == UCode::NOT_FOUND }));
         }
-
-        let empty_result = client
-            .unregister_listener(&source_uri, sink_uri.as_ref(), listener.clone())
-            .await;
-
-        assert!(empty_result.is_err_and(|err| { err.get_code() == UCode::NOT_FOUND }));
     }
 }

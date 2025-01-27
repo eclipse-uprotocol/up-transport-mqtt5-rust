@@ -164,6 +164,11 @@ pub struct Mqtt5Transport {
 impl Mqtt5Transport {
     /// Creates a new transport.
     ///
+    /// The connection to the MQTT broker needs to be established by means of the
+    /// [`Self::connect`] function. This allows for clients to implement any particular
+    /// connection strategy using e.g. an exponential backoff for subsequent connection
+    /// attempts.
+    ///
     /// # Arguments
     /// * `mode` - The transport's mode of operation.
     /// * `options` - Configuration options for connecting to the MQTT broker.
@@ -181,16 +186,17 @@ impl Mqtt5Transport {
 
         // Create the MQTT client
         let mut client_operations =
-            mqtt_client::PahoBasedMqttClientOperations::new_client(&options)?;
+            mqtt_client::PahoBasedMqttClientOperations::new_client(options)?;
+        let inbound_message_stream = client_operations.get_message_stream()?;
 
         // Create the callback for processing messages received from the broker
         let message_callback_handle = Some(Self::create_cb_message_handler(
             subscription_topics.clone(),
             topic_listeners.clone(),
-            client_operations.get_message_stream(),
+            inbound_message_stream,
         ));
 
-        client_operations.connect(&options).await.map(|_| Self {
+        Ok(Self {
             mqtt_client: Box::new(client_operations),
             subscription_topics,
             topic_listeners,
@@ -201,11 +207,31 @@ impl Mqtt5Transport {
         })
     }
 
+    /// Establishes the initial connection to the MQTT broker.
+    ///
+    /// In case the connection is lost, the transport will try to reestablish the connection
+    /// automatically. The current connection status can be determined by means of
+    /// [`Self::is_connected`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection cannot be established within the
+    /// default timeout period.
+    pub async fn connect(&self) -> Result<(), UStatus> {
+        self.mqtt_client.connect().await
+    }
+
+    /// Checks if the transport is currently connected to the MQTT broker.
+    pub fn is_connected(&self) -> bool {
+        self.mqtt_client.is_connected()
+    }
+
     /// Stops processing of incoming messages.
     pub fn shutdown(&self) {
         if let Some(cb_message_handle) = self.message_callback_handle.as_ref() {
             cb_message_handle.abort();
         }
+        self.mqtt_client.disconnect()
     }
 
     // Creates a callback message handler that listens for incoming messages and notifies listeners asynchronously.
@@ -444,6 +470,8 @@ impl Mqtt5Transport {
         if listeners.is_empty() {
             // Unsubscribe from topic.
             if let Err(e) = self.mqtt_client.unsubscribe(topic_filter).await {
+                // restore original state
+                listeners.insert(comp_listener);
                 return Err(e);
             } else {
                 // remove topic filter
@@ -810,5 +838,43 @@ mod tests {
         assert!(mode
             .to_mqtt_topic(&src_uri, sink_uri.as_ref(), "local_authority")
             .is_ok_and(|topic| topic == expected_topic));
+    }
+
+    #[tokio::test]
+    async fn test_connect_invokes_mqtt_client() {
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations
+            .expect_connect()
+            .once()
+            .return_const(Ok(()));
+        let client = Mqtt5Transport {
+            mqtt_client: Box::new(client_operations),
+            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
+            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
+            authority_name: "VIN.vehicles".to_string(),
+            mode: TransportMode::InVehicle,
+            free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
+            message_callback_handle: None,
+        };
+        assert!(client.connect().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_disconnects_mqtt_client() {
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations
+            .expect_disconnect()
+            .once()
+            .return_const(());
+        let client = Mqtt5Transport {
+            mqtt_client: Box::new(client_operations),
+            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
+            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
+            authority_name: "VIN.vehicles".to_string(),
+            mode: TransportMode::InVehicle,
+            free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
+            message_callback_handle: None,
+        };
+        client.shutdown();
     }
 }

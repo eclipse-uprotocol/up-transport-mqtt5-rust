@@ -58,6 +58,8 @@ async fn main() -> Result<(), UStatus> {
     )
     .await?;
 
+    client.connect().await?;
+
     let listener = Arc::new(LoggingListener {});
 
     info!(

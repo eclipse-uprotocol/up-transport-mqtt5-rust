@@ -44,6 +44,8 @@ async fn main() -> Result<(), UStatus> {
     )
     .await?;
 
+    client.connect().await?;
+
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let current_time = SystemTime::now()

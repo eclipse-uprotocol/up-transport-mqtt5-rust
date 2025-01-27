@@ -11,13 +11,17 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use async_channel::Receiver;
 use async_trait::async_trait;
 #[cfg(feature = "cli")]
 use clap::Args;
-use log::trace;
+use log::{debug, trace};
 use up_rust::{UCode, UStatus};
 
 #[cfg(feature = "cli")]
@@ -143,6 +147,8 @@ impl TryFrom<&MqttClientOptions> for paho_mqtt::ConnectOptions {
             // session expiration as defined by client options
             // [impl->req~up-transport-mqtt5-session-config~1]
             .properties(paho_mqtt::properties![paho_mqtt::PropertyCode::SessionExpiryInterval => options.session_expiry_interval])
+            // TODO: make this configiurable
+            .connect_timeout(Duration::from_secs(10))
             .ssl_options(ssl_options);
         if let Some(v) = options.username.as_ref() {
             connect_options_builder.user_name(v);
@@ -222,6 +228,20 @@ impl TryFrom<&SslOptions> for paho_mqtt::SslOptions {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub(crate) trait MqttClientOperations: Sync + Send {
+    /// Establishes the connection to the configured broker.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection cannot be established within the default
+    /// connect timeout period.
+    async fn connect(&self) -> Result<(), UStatus>;
+
+    /// Disconnects from the broker.
+    fn disconnect(&self);
+
+    /// Checks if the client is currently connected to the broker.
+    fn is_connected(&self) -> bool;
+
     /// Publishes a message to a topic.
     ///
     /// # Arguments
@@ -244,25 +264,47 @@ pub(crate) trait MqttClientOperations: Sync + Send {
     async fn unsubscribe(&self, topic: &str) -> Result<(), UStatus>;
 }
 
-pub(crate) struct PahoBasedMqttClientOperations {
-    inner_mqtt_client: paho_mqtt::AsyncClient,
+#[derive(Default)]
+struct ConnectionState {
     subscription_ids_supported: bool,
+    session_present: bool,
+}
+
+pub(crate) struct PahoBasedMqttClientOperations {
+    inner_mqtt_client: Arc<paho_mqtt::AsyncClient>,
+    inbound_messages: Option<Receiver<Option<paho_mqtt::Message>>>,
+    client_options: MqttClientOptions,
 }
 
 impl PahoBasedMqttClientOperations {
+    fn ustatus_from_paho_error(paho_error: paho_mqtt::Error) -> UStatus {
+        match paho_error {
+            paho_mqtt::Error::Disconnected => {
+                UStatus::fail_with_code(UCode::UNAVAILABLE, "not connected to MQTT broker")
+            }
+            paho_mqtt::Error::TcpTlsConnectFailure => {
+                UStatus::fail_with_code(UCode::UNAVAILABLE, "failed to connect to MQTT broker")
+            }
+            _ => UStatus::fail_with_code(UCode::UNKNOWN, paho_error.to_string()),
+        }
+    }
+
     /// Creates new MQTT client.
     ///
     /// # Arguments
-    /// * `options` - Configuration for the MQTT client.
+    /// * `options` - Configuration for the MQTT client. These configuration options
+    ///               are getting stored with the client and used again when
+    ///               reestablishing a lost connection to the broker.
     ///
     /// # Returns
     ///
     /// A newly created MQTT client that is not connected to the broker yet (see `Self::connect`).
-    pub(crate) fn new_client(options: &MqttClientOptions) -> Result<Self, UStatus> {
+    pub(crate) fn new_client(options: MqttClientOptions) -> Result<Self, UStatus> {
         paho_mqtt::CreateOptionsBuilder::new()
             .server_uri(&options.broker_uri)
             .client_id(options.client_id.clone().unwrap_or_default())
             .max_buffered_messages(options.max_buffered_messages as i32)
+            .user_data(Box::new(RwLock::new(ConnectionState::default())))
             .create_client()
             .map_err(|e| {
                 UStatus::fail_with_code(
@@ -270,9 +312,13 @@ impl PahoBasedMqttClientOperations {
                     format!("Failed to create MQTT client: {e:?}"),
                 )
             })
-            .map(|client| Self {
-                inner_mqtt_client: client,
-                subscription_ids_supported: true,
+            .map(|mut async_client| {
+                let inbound_message_stream = async_client.get_stream(100);
+                Self {
+                    inner_mqtt_client: Arc::new(async_client),
+                    inbound_messages: Some(inbound_message_stream),
+                    client_options: options,
+                }
             })
     }
 
@@ -281,26 +327,73 @@ impl PahoBasedMqttClientOperations {
     /// It is good practice to set up the handling of messages before connecting to
     /// the broker because the messages may start flowing even before the call
     /// to `Self::connect` returns.
-    pub(crate) fn get_message_stream(&mut self) -> Receiver<Option<paho_mqtt::Message>> {
-        self.inner_mqtt_client.get_stream(100)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stream has already been retrieved before.
+    pub(crate) fn get_message_stream(
+        &mut self,
+    ) -> Result<Receiver<Option<paho_mqtt::Message>>, UStatus> {
+        self.inbound_messages.take().ok_or_else(|| {
+            UStatus::fail_with_code(
+                UCode::FAILED_PRECONDITION,
+                "Inbound message stream has already been retrieved",
+            )
+        })
     }
 
-    /// Establishes the connection to the configured broker.
-    pub(crate) async fn connect(&mut self, options: &MqttClientOptions) -> Result<(), UStatus> {
+    fn is_subscription_ids_supported(&self) -> bool {
+        if let Some(conn_props) = self
+            .inner_mqtt_client
+            .user_data()
+            .and_then(|user_data| user_data.downcast_ref::<RwLock<ConnectionState>>())
+        {
+            if let Ok(locked_props) = conn_props.read() {
+                return locked_props.subscription_ids_supported;
+            }
+        }
+        false
+    }
+
+    fn handle_connect_response(user_data: &paho_mqtt::UserData, token: paho_mqtt::ServerResponse) {
+        if let Some(connection_properties) = user_data.downcast_ref::<RwLock<ConnectionState>>() {
+            if let Ok(mut props) = connection_properties.write() {
+                props.subscription_ids_supported = token
+                    .properties()
+                    .get(paho_mqtt::PropertyCode::SubscriptionIdentifiersAvailable)
+                    .and_then(|p| p.get_byte())
+                    .map_or(true, |v| v == 1);
+                debug!(
+                    "subscription IDs supported: {}",
+                    props.subscription_ids_supported
+                );
+
+                if let Some(connect_response) = token.connect_response() {
+                    props.session_present = connect_response.session_present;
+                    debug!("session present: {}", props.session_present);
+                }
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl MqttClientOperations for PahoBasedMqttClientOperations {
+    async fn connect(&self) -> Result<(), UStatus> {
         if self.inner_mqtt_client.is_connected() {
             return Ok(());
         }
-        let connect_options =
-            paho_mqtt::ConnectOptions::try_from(options).map_err(|e: paho_mqtt::Error| {
-                UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string())
-            })?;
+        let connect_options = paho_mqtt::ConnectOptions::try_from(&self.client_options).map_err(
+            |e: paho_mqtt::Error| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()),
+        )?;
 
         self.inner_mqtt_client
             .connect(connect_options)
             .await
-            .map(|token| {
-                self.subscription_ids_supported =
-                    Self::check_subscription_identifiers_supported(token.properties());
+            .map(|response| {
+                if let Some(user_data) = self.inner_mqtt_client.user_data() {
+                    Self::handle_connect_response(user_data, response);
+                }
             })
             .map_err(|e| {
                 UStatus::fail_with_code(
@@ -310,52 +403,45 @@ impl PahoBasedMqttClientOperations {
             })
     }
 
-    fn check_subscription_identifiers_supported(props: &paho_mqtt::Properties) -> bool {
-        props
-            .get(paho_mqtt::PropertyCode::SubscriptionIdentifiersAvailable)
-            .and_then(|p| p.get_byte())
-            .map_or(true, |v| v == 1)
+    fn is_connected(&self) -> bool {
+        self.inner_mqtt_client.is_connected()
     }
 
-    // Create a set of poperties with a single Subscription ID
-    fn get_properties_for_subscription_id(id: u16) -> paho_mqtt::Properties {
-        paho_mqtt::properties![
-            paho_mqtt::PropertyCode::SubscriptionIdentifier => id as i32
-        ]
+    fn disconnect(&self) {
+        let _token = self.inner_mqtt_client.disconnect(None);
     }
-}
 
-#[async_trait]
-impl MqttClientOperations for PahoBasedMqttClientOperations {
     async fn publish(&self, mqtt_message: paho_mqtt::Message) -> Result<(), UStatus> {
         self.inner_mqtt_client
             .publish(mqtt_message)
             .await
-            .map_err(|e| UStatus::fail_with_code(UCode::INTERNAL, e.to_string()))
+            .map_err(Self::ustatus_from_paho_error)
             .map(|_response| Ok(()))?
     }
 
     async fn subscribe(&self, topic: &str, id: u16) -> Result<(), UStatus> {
-        // QOS 1 - Delivered and received at least once
-        let subscription_properties = if self.subscription_ids_supported {
-            trace!(
-                "Subcription identifier supported by broker. Subscribe with subscription id {}",
-                id
-            );
-            Some(Self::get_properties_for_subscription_id(id))
+        let subscription_properties = if self.is_subscription_ids_supported() {
+            trace!("Creating subscription [topic: {}, ID: {}]", topic, id);
+            let mut properties = paho_mqtt::Properties::new();
+            properties
+                .push_int(paho_mqtt::PropertyCode::SubscriptionIdentifier, id as i32)
+                .map_err(|err| {
+                    debug!("Failed to create property for subscription identifier: {err}");
+                    UStatus::fail_with_code(
+                        UCode::INTERNAL,
+                        "Failed to create subscription property",
+                    )
+                })?;
+            Some(properties)
         } else {
+            trace!("Creating subscription [topic: {}]", topic);
             None
         };
 
         self.inner_mqtt_client
             .subscribe_with_options(topic, paho_mqtt::QOS_1, None, subscription_properties)
             .await
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to subscribe to topic: {e:?}"),
-                )
-            })
+            .map_err(Self::ustatus_from_paho_error)
             .map(|_response| Ok(()))?
     }
 
@@ -363,12 +449,7 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
         self.inner_mqtt_client
             .unsubscribe(topic)
             .await
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to unsubscribe from topic: {e:?}"),
-                )
-            })
+            .map_err(Self::ustatus_from_paho_error)
             .map(|_response| Ok(()))?
     }
 }
