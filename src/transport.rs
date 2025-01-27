@@ -25,25 +25,14 @@ impl UTransport for Mqtt5Transport {
         // validate message
         let attributes = message.attributes.as_ref().ok_or(UStatus::fail_with_code(
             UCode::INVALID_ARGUMENT,
-            "Unable to parse uAttributes",
+            "uProtocol message has no attributes",
         ))?;
-
-        // Get mqtt topic string from source and sink uuris
-        let src_uri = attributes.source.as_ref().ok_or(UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
-            "Invalid source: expected a source value, none was found",
-        ))?;
-        // [impl->dsn~up-transport-mqtt5-e2e-topic-names~1]
-        // [impl->dsn~up-transport-mqtt5-d2d-topic-names~1]
-        let topic = self
-            .to_mqtt_topic_string(src_uri, attributes.sink.as_ref())
-            .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
 
         // Extract payload from umessage to send
         // [impl->dsn~up-transport-mqtt5-payload-mapping~1]
         let payload = message.payload;
 
-        self.send_message(&topic, attributes, payload).await
+        self.send_message(attributes, payload).await
     }
 
     async fn register_listener(
@@ -77,6 +66,7 @@ impl UTransport for Mqtt5Transport {
 mod tests {
     use std::{collections::HashMap, str::FromStr};
 
+    use paho_mqtt::TopicMatcher;
     use up_rust::{
         ComparableListener, MockUListener, UMessageBuilder, UMessageType, UPayloadFormat, UUID,
     };
@@ -194,8 +184,8 @@ mod tests {
             });
         let client = Mqtt5Transport {
             mqtt_client: Box::new(client_operations),
-            subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
-            topic_listener_map: Arc::new(RwLock::new(HashMap::new())),
+            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
+            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
@@ -233,7 +223,7 @@ mod tests {
         expected_topic: &str,
         expected_error_code: Option<UCode>,
     ) {
-        let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
+        let topic_listeners = Arc::new(RwLock::new(TopicMatcher::new()));
         let expected_topic_filter = expected_topic.to_string();
         let mut client_operations = MockMqttClientOperations::new();
         client_operations.expect_subscribe().once().return_once(
@@ -248,8 +238,8 @@ mod tests {
 
         let client = Mqtt5Transport {
             mqtt_client: Box::new(client_operations),
-            subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
-            topic_listener_map,
+            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
+            topic_listeners,
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
@@ -272,13 +262,11 @@ mod tests {
             assert!(send_result.is_ok());
         }
 
-        let topic_map = client.topic_listener_map.read().await;
+        let topic_map = client.topic_listeners.read().await;
 
-        assert!(topic_map.contains_key(expected_topic));
-
-        let listeners = topic_map.get(expected_topic).unwrap();
-
-        assert!(listeners.contains(&ComparableListener::new(listener)));
+        assert!(topic_map
+            .get(expected_topic)
+            .is_some_and(|listeners| listeners.contains(&ComparableListener::new(listener))));
     }
 
     #[test_case(
@@ -302,7 +290,7 @@ mod tests {
         expected_topic: &str,
         expected_error_code: Option<UCode>,
     ) {
-        let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
+        let topic_listeners = Arc::new(RwLock::new(TopicMatcher::new()));
         let expected_topic_filter = expected_topic.to_string();
         let mut client_operations = MockMqttClientOperations::new();
         client_operations
@@ -319,15 +307,15 @@ mod tests {
         let listener = Arc::new(MockUListener::new());
         let comparable_listener = ComparableListener::new(listener.clone());
 
-        topic_listener_map.write().await.insert(
+        topic_listeners.write().await.insert(
             expected_topic.to_string(),
             [comparable_listener.clone()].iter().cloned().collect(),
         );
 
         let client = Mqtt5Transport {
             mqtt_client: Box::new(client_operations),
-            subscription_topic_map: Arc::new(RwLock::new(HashMap::new())),
-            topic_listener_map,
+            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
+            topic_listeners,
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
@@ -349,8 +337,8 @@ mod tests {
         }
 
         {
-            let topic_map = client.topic_listener_map.read().await;
-            assert!(!topic_map.contains_key(expected_topic));
+            let topic_map = client.topic_listeners.read().await;
+            assert!(topic_map.get(expected_topic).is_none());
         }
 
         let empty_result = client

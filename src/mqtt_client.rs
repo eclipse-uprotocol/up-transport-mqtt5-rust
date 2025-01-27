@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 
 use async_channel::Receiver;
 use async_trait::async_trait;
@@ -51,7 +51,7 @@ const PARAM_MQTT_TRUST_STORE_PATH: &str = "mqtt-trust-store-path";
 
 const DEFAULT_BROKER_URI: &str = "mqtt://localhost:1883";
 const DEFAULT_CLEAN_START: bool = false;
-const DEFAULT_MAX_BUFFERED_MESSAGES: u16 = 20;
+const DEFAULT_MAX_BUFFERED_MESSAGES: u16 = 0;
 const DEFAULT_MAX_SUBSCRIPTIONS: u16 = 50;
 const DEFAULT_SESSION_EXPIRY_INTERVAL: u32 = 0;
 
@@ -110,7 +110,7 @@ impl Default for MqttClientOptions {
     /// assert!(options.client_id.is_none());
     /// assert_eq!(options.broker_uri, "mqtt://localhost:1883");
     /// assert!(!options.clean_start);
-    /// assert_eq!(options.max_buffered_messages, 20);
+    /// assert_eq!(options.max_buffered_messages, 0);
     /// assert_eq!(options.max_subscriptions, 50);
     /// assert_eq!(options.session_expiry_interval, 0);
     /// assert!(options.username.is_none());
@@ -137,8 +137,6 @@ impl TryFrom<&MqttClientOptions> for paho_mqtt::ConnectOptions {
     fn try_from(options: &MqttClientOptions) -> Result<Self, Self::Error> {
         let ssl_options = paho_mqtt::SslOptions::try_from(options)?;
         let mut connect_options_builder = paho_mqtt::ConnectOptionsBuilder::new_v5();
-        connect_options_builder
-            .automatic_reconnect(Duration::from_secs(1), Duration::from_secs(16));
         connect_options_builder
             // [impl->req~up-transport-mqtt5-session-config~1]
             .clean_start(options.clean_start)
@@ -333,12 +331,7 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
         self.inner_mqtt_client
             .publish(mqtt_message)
             .await
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("Unable to publish message: {e:?}"),
-                )
-            })
+            .map_err(|e| UStatus::fail_with_code(UCode::INTERNAL, e.to_string()))
             .map(|_response| Ok(()))?
     }
 
