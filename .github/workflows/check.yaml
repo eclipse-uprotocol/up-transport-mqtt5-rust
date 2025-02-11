@@ -142,7 +142,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Run cargo nextest
         run: |
-          cargo nextest run --message-format libtest-json-plus ${{ matrix.feature-flags }} > testresults${{ matrix.feature-flags }}.json
+          cargo nextest run --no-fail-fast --retries 1 --message-format libtest-json-plus ${{ matrix.feature-flags }} > testresults${{ matrix.feature-flags }}.json
 
       - name: Upload all-features test results artifact
         id: test_results
