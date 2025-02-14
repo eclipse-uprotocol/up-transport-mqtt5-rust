@@ -11,30 +11,25 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use async_channel::Receiver;
 use bytes::Bytes;
 use futures::stream::StreamExt;
+use listener_registry::{RegisteredListeners, SubscriptionIdentifier};
 use log::{debug, trace};
 use mqtt_client::MqttClientOperations;
 pub use mqtt_client::{MqttClientOptions, SslOptions};
 use paho_mqtt::{self as mqtt, Message, QOS_1};
 use tokio::{sync::RwLock, task::JoinHandle};
-use up_rust::{ComparableListener, UAttributes, UCode, UMessage, UStatus, UUri, UUriError};
+use up_rust::{UAttributes, UCode, UMessage, UStatus, UUri, UUriError};
 
+mod listener_registry;
 mod mapping;
 mod mqtt_client;
 mod transport;
 
 const MQTT_TOPIC_ANY_SEGMENT_WILDCARD: &str = "+";
-
-type SubscriptionIdentifier = u16;
-type SubscriptionTopics = Arc<RwLock<HashMap<SubscriptionIdentifier, String>>>;
-type TopicListeners = Arc<RwLock<paho_mqtt::TopicMatcher<HashSet<ComparableListener>>>>;
 
 /// The transport's mode of operation.
 pub enum TransportMode {
@@ -146,17 +141,12 @@ impl TransportMode {
 /// An MQTT 5 based uProtocol transport implementation.
 pub struct Mqtt5Transport {
     /// Client instance for connecting to mqtt broker.
-    mqtt_client: Box<dyn MqttClientOperations>,
-    /// Mapping of subscription identifiers to topic filters.
-    subscription_topics: SubscriptionTopics,
-    /// Mapping of topic filters to listeners.
-    topic_listeners: TopicListeners,
+    mqtt_client: Arc<dyn MqttClientOperations>,
+    registered_listeners: Arc<RwLock<RegisteredListeners>>,
     /// My authority
     authority_name: String,
     /// The transport's mode of operation.
     mode: TransportMode,
-    /// List of free subscription identifiers to use for the client subscriptions.
-    free_subscription_ids: Arc<RwLock<HashSet<SubscriptionIdentifier>>>,
     /// Handle to the message callback.
     message_callback_handle: Option<JoinHandle<()>>,
 }
@@ -178,31 +168,27 @@ impl Mqtt5Transport {
         options: MqttClientOptions,
         authority_name: String,
     ) -> Result<Self, UStatus> {
-        let subscription_topics = Arc::new(RwLock::new(HashMap::new()));
-        // let topic_listener_map = Arc::new(RwLock::new(HashMap::new()));
-        let topic_listeners = Arc::new(RwLock::new(paho_mqtt::TopicMatcher::new()));
-        let free_subscription_ids =
-            Arc::new(RwLock::new((1..(options.max_subscriptions) + 1).collect()));
+        let registered_listeners = Arc::new(RwLock::new(RegisteredListeners::new(
+            options.max_subscriptions,
+        )));
 
         // Create the MQTT client
         let mut client_operations =
             mqtt_client::PahoBasedMqttClientOperations::new_client(options)?;
         let inbound_message_stream = client_operations.get_message_stream()?;
+        let mqtt_client = Arc::new(client_operations);
 
         // Create the callback for processing messages received from the broker
         let message_callback_handle = Some(Self::create_cb_message_handler(
-            subscription_topics.clone(),
-            topic_listeners.clone(),
+            registered_listeners.clone(),
             inbound_message_stream,
         ));
 
         Ok(Self {
-            mqtt_client: Box::new(client_operations),
-            subscription_topics,
-            topic_listeners,
+            mqtt_client,
+            registered_listeners,
             authority_name,
             mode,
-            free_subscription_ids,
             message_callback_handle,
         })
     }
@@ -232,17 +218,17 @@ impl Mqtt5Transport {
             cb_message_handle.abort();
         }
         self.mqtt_client.disconnect()
+        // TODO: clean up subscription state
     }
 
-    // Creates a callback message handler that listens for incoming messages and notifies listeners asynchronously.
-    //
-    // # Arguments
-    // * `subscription_topics` - Map of subscription identifiers to subscribed topic filters.
-    // * `topic_listeners` - Map of topic filters to listeners.
-    // * `message_stream` - Stream of incoming MQTT PUBLISH packets.
+    /// Creates a callback message handler that listens for incoming messages and notifies listeners asynchronously.
+    ///
+    /// # Arguments
+    /// * `subscription_topics` - Map of subscription identifiers to subscribed topic filters.
+    /// * `topic_listeners` - Map of topic filters to listeners.
+    /// * `message_stream` - Stream of incoming MQTT PUBLISH packets.
     fn create_cb_message_handler(
-        subscription_topics: SubscriptionTopics,
-        topic_listeners: TopicListeners,
+        registered_listeners: Arc<RwLock<RegisteredListeners>>,
         mut message_stream: Receiver<Option<Message>>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
@@ -276,30 +262,14 @@ impl Mqtt5Transport {
                     .filter_map(|property| property.get_u16())
                     .collect();
 
-                let mut listeners_to_invoke = HashSet::new();
-                let topic_listeners_read = topic_listeners.read().await;
-                if subscription_ids.is_empty() {
-                    // determine listeners based on message's topic
-                    topic_listeners_read.matches(msg.topic()).for_each(
-                        |(_topic_filter, listeners)| {
-                            listeners.iter().for_each(|listener| {
-                                listeners_to_invoke.insert(listener.to_owned());
-                            });
-                        },
-                    );
-                } else {
-                    // determine listeners registered for subscription IDs
-                    let subscription_map_read = subscription_topics.read().await;
-                    subscription_ids.iter().for_each(|sub_id| {
-                        if let Some(listeners) = subscription_map_read
-                            .get(sub_id)
-                            .and_then(|topic_filter| topic_listeners_read.get(topic_filter))
-                        {
-                            listeners.iter().for_each(|listener| {
-                                listeners_to_invoke.insert(listener.to_owned());
-                            });
-                        }
-                    });
+                let listeners_to_invoke = {
+                    let registered_listeners_read = registered_listeners.read().await;
+                    if subscription_ids.is_empty() {
+                        registered_listeners_read.determine_listeners_for_topic(msg.topic())
+                    } else {
+                        registered_listeners_read
+                            .determine_listeners_for_subscription_ids(subscription_ids.as_slice())
+                    }
                 };
 
                 for listener in listeners_to_invoke {
@@ -310,30 +280,6 @@ impl Mqtt5Transport {
                 }
             }
         })
-    }
-
-    /// Get an available subscription id to use.
-    async fn get_free_subscription_id(&self) -> Result<SubscriptionIdentifier, UStatus> {
-        // Get a random subscription id from the free subscription ids.
-        let mut free_ids = self.free_subscription_ids.write().await;
-        if let Some(&id) = free_ids.iter().next() {
-            free_ids.remove(&id);
-            Ok(id)
-        } else {
-            Err(UStatus::fail_with_code(
-                UCode::INTERNAL,
-                "Max number of subscriptions reached on this client.",
-            ))
-        }
-    }
-
-    /// Returns a subscription ID back to the pool of free/unused subscription IDs.
-    ///
-    /// # Arguments
-    /// * `id` - The subscription ID to release.
-    async fn release_subscription_id(&self, id: SubscriptionIdentifier) {
-        let mut free_ids = self.free_subscription_ids.write().await;
-        free_ids.insert(id);
     }
 
     /// Publishes a uProtocol message to an MQTT topic.
@@ -410,35 +356,24 @@ impl Mqtt5Transport {
         topic_filter: &str,
         listener: Arc<dyn up_rust::UListener>,
     ) -> Result<(), UStatus> {
-        let comp_listener = ComparableListener::new(listener);
-        let mut topic_listener_map = self.topic_listeners.write().await;
-
-        if let Some(listeners) = topic_listener_map.get_mut(topic_filter) {
-            debug!("adding listener to existing subscription");
-            listeners.insert(comp_listener);
-        } else {
-            let mut listeners = HashSet::new();
-            listeners.insert(comp_listener);
-            topic_listener_map.insert(topic_filter, listeners);
-
-            let subscription_id = self.get_free_subscription_id().await?;
-            let mut subscription_topic_map = self.subscription_topics.write().await;
-            subscription_topic_map.insert(subscription_id, topic_filter.to_string());
+        let mut registered_listeners_write = self.registered_listeners.write().await;
+        if let Some(subscription_id) =
+            registered_listeners_write.add_listener(topic_filter, listener)?
+        {
             // Subscribe to topic.
             if let Err(sub_err) = self
                 .mqtt_client
                 .subscribe(topic_filter, subscription_id)
                 .await
             {
+                debug!("Failed to create new subscription for listener");
                 // If subscribe fails, add subscription id back to free subscription ids.
-                self.release_subscription_id(subscription_id).await;
-                topic_listener_map.remove(topic_filter);
-                debug!("failed to create new subscription for listener");
+                registered_listeners_write.release_subscription_id(subscription_id, topic_filter);
                 return Err(sub_err);
             } else {
                 debug!(
-                    "created new subscription [id: {}] for listener",
-                    subscription_id
+                    "Created new subscription [topic filter: {}, id: {}] for listener",
+                    topic_filter, subscription_id
                 );
             };
         }
@@ -455,46 +390,24 @@ impl Mqtt5Transport {
         topic_filter: &str,
         listener: Arc<dyn up_rust::UListener>,
     ) -> Result<(), UStatus> {
-        let mut topic_listener_map = self.topic_listeners.write().await;
-
-        let Some(listeners) = topic_listener_map.get_mut(topic_filter) else {
-            return Err(UStatus::fail_with_code(
-                UCode::NOT_FOUND,
-                format!("No listeners registered for topic filter [{topic_filter}]."),
-            ));
-        };
-
-        let comp_listener = ComparableListener::new(listener);
-        listeners.remove(&comp_listener);
-
-        if listeners.is_empty() {
-            // Unsubscribe from topic.
+        let mut registered_listeners_write = self.registered_listeners.write().await;
+        if registered_listeners_write.is_last_listener(topic_filter, listener.clone()) {
+            // we are about to remove the last listener for the topic filter,
+            // so we no longer want messages from the broker matching the filter
             if let Err(e) = self.mqtt_client.unsubscribe(topic_filter).await {
-                // restore original state
-                listeners.insert(comp_listener);
+                debug!("Failed to unsubscribe from topic filter [{topic_filter}]");
                 return Err(e);
-            } else {
-                // remove topic filter
-                topic_listener_map.remove(topic_filter);
-
-                let mut subscription_topic_map = self.subscription_topics.write().await;
-                if let Some(sub_id) = subscription_topic_map.iter().find_map(|(k, v)| {
-                    if v == topic_filter {
-                        Some(*k)
-                    } else {
-                        None
-                    }
-                }) {
-                    // remove mapping of subscription id to topic filter
-                    subscription_topic_map.remove(&sub_id);
-
-                    // and release subscription id
-                    self.release_subscription_id(sub_id).await;
-                }
             }
         }
 
-        Ok(())
+        if registered_listeners_write.remove_listener(topic_filter, listener) {
+            Ok(())
+        } else {
+            Err(UStatus::fail_with_code(
+                UCode::NOT_FOUND,
+                format!("No such listener registered for topic filter [{topic_filter}]"),
+            ))
+        }
     }
 
     /// Creates an MQTT topic for a source and sink uProtocol URI.
@@ -517,7 +430,6 @@ mod tests {
     use std::str::FromStr;
 
     use mqtt_client::MockMqttClientOperations;
-    use paho_mqtt::TopicMatcher;
     use up_rust::MockUListener;
 
     use test_case::test_case;
@@ -525,166 +437,69 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_get_free_subscription_id() {
-        let up_client = Mqtt5Transport {
-            mqtt_client: Box::new(MockMqttClientOperations::new()),
-            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
-            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
-            authority_name: "test".to_string(),
-            mode: TransportMode::InVehicle,
-            free_subscription_ids: Arc::new(RwLock::new((1..3).collect())),
-            message_callback_handle: None,
-        };
-
-        let expected_vals: Vec<u16> = up_client
-            .free_subscription_ids
-            .read()
-            .await
-            .iter()
-            .cloned()
-            .collect();
-        let mut collected_vals = Vec::<u16>::new();
-
-        let result = up_client.get_free_subscription_id().await;
-
-        assert!(result.is_ok());
-        collected_vals.push(result.unwrap());
-
-        let result = up_client.get_free_subscription_id().await;
-
-        assert!(result.is_ok());
-        collected_vals.push(result.unwrap());
-
-        assert!(collected_vals.len() == 2);
-        assert!(collected_vals.iter().all(|x| expected_vals.contains(x)));
-        assert!(up_client.free_subscription_ids.read().await.is_empty());
-
-        let result = up_client.get_free_subscription_id().await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_add_free_subscription_id() {
-        let up_client = Mqtt5Transport {
-            mqtt_client: Box::new(MockMqttClientOperations::new()),
-            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
-            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
-            authority_name: "test".to_string(),
-            mode: TransportMode::InVehicle,
-            free_subscription_ids: Arc::new(RwLock::new((1..3).collect())),
-            message_callback_handle: None,
-        };
-
-        let expected_id = 7;
-
-        up_client.release_subscription_id(expected_id).await;
-
-        let free_ids = up_client.free_subscription_ids.read().await;
-
-        assert!(free_ids.contains(&expected_id));
-    }
-
-    #[tokio::test]
-    async fn test_add_listener() {
+    async fn test_add_listener_subscribes_to_topic_filter() {
+        let topic_filter = "+/local_authority";
         let listener = Arc::new(MockUListener::new());
-        let expected_listener = ComparableListener::new(listener.clone());
-        let sub_map = Arc::new(RwLock::new(HashMap::new()));
-        let topic_listeners = Arc::new(RwLock::new(TopicMatcher::new()));
+        let expected_topic_filter = topic_filter.to_string();
         let mut client_operations = MockMqttClientOperations::new();
-        client_operations
-            .expect_subscribe()
-            .once()
-            .return_const(Ok(()));
-
-        let up_client = Mqtt5Transport {
-            mqtt_client: Box::new(client_operations),
-            subscription_topics: sub_map.clone(),
-            topic_listeners: topic_listeners.clone(),
-            authority_name: "test".to_string(),
-            mode: TransportMode::InVehicle,
-            free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
-            message_callback_handle: None,
-        };
-
-        assert!(topic_listeners.read().await.is_empty());
-
-        let result = up_client.add_listener("test_topic", listener.clone()).await;
-
-        assert!(result.is_ok());
-
-        let actual_topic_map = topic_listeners.read().await;
-
-        assert!(actual_topic_map
-            .get("test_topic")
-            .is_some_and(|actual_listeners| {
-                actual_listeners.len() == 1 && actual_listeners.contains(&expected_listener)
-            }));
-    }
-
-    #[tokio::test]
-    async fn test_remove_listener() {
-        let listener_1 = Arc::new(MockUListener::new());
-        let comparable_listener_1 = ComparableListener::new(listener_1.clone());
-        let listener_2 = Arc::new(MockUListener::new());
-        let comparable_listener_2 = ComparableListener::new(listener_2.clone());
-        let sub_map = Arc::new(RwLock::new(HashMap::new()));
-        let topic_map = Arc::new(RwLock::new(TopicMatcher::new()));
-
-        topic_map.write().await.insert(
-            "test_topic".to_string(),
-            [comparable_listener_1.clone(), comparable_listener_2.clone()]
-                .iter()
-                .cloned()
-                .collect(),
+        client_operations.expect_subscribe().once().return_once(
+            move |topic_filter, _subscription_id| {
+                assert_eq!(topic_filter, expected_topic_filter);
+                Ok(())
+            },
         );
 
-        let mut client_operations = MockMqttClientOperations::new();
-        client_operations.expect_unsubscribe().return_const(Ok(()));
-
         let up_client = Mqtt5Transport {
-            mqtt_client: Box::new(client_operations),
-            subscription_topics: sub_map.clone(),
-            topic_listeners: topic_map.clone(),
+            mqtt_client: Arc::new(client_operations),
+            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
-            free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
             message_callback_handle: None,
         };
 
-        assert!(!topic_map.read().await.is_empty());
+        assert!(up_client
+            .add_listener(topic_filter, listener.clone())
+            .await
+            .is_ok());
+    }
 
-        let result = up_client
-            .remove_listener("test_topic", listener_1.clone())
-            .await;
+    #[tokio::test]
+    async fn test_remove_listener_unsubscribes_topic_filter() {
+        let topic_filter = "+/local_authority";
+        let expected_topic_filter = topic_filter.to_string();
+        let mut registered_listeners = RegisteredListeners::new(10);
+        let listener = Arc::new(MockUListener::new());
 
-        assert!(result.is_ok());
+        assert!(registered_listeners
+            .add_listener(topic_filter, listener.clone())
+            .expect("Failed to add listener")
+            .is_some());
 
-        {
-            let actual_topic_map = topic_map.read().await;
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations
+            .expect_unsubscribe()
+            .return_once(move |topic_filter| {
+                assert_eq!(topic_filter, expected_topic_filter);
+                Ok(())
+            });
 
-            assert!(actual_topic_map
-                .get("test_topic")
-                .is_some_and(|actual_listeners| {
-                    actual_listeners.len() == 1
-                        && !actual_listeners.contains(&comparable_listener_1)
-                        && actual_listeners.contains(&comparable_listener_2)
-                }));
-        }
+        let up_client = Mqtt5Transport {
+            mqtt_client: Arc::new(client_operations),
+            registered_listeners: Arc::new(RwLock::new(registered_listeners)),
+            authority_name: "test".to_string(),
+            mode: TransportMode::InVehicle,
+            message_callback_handle: None,
+        };
 
-        let result = up_client
-            .remove_listener("test_topic", listener_2.clone())
-            .await;
+        assert!(up_client
+            .remove_listener(topic_filter, listener.clone())
+            .await
+            .is_ok());
 
-        assert!(result.is_ok());
-        assert!(topic_map.read().await.get("test_topic").is_none());
-
-        let result = up_client
-            .remove_listener("test_topic", listener_2.clone())
-            .await;
-
-        assert!(result.is_err());
-        assert!(result.err().unwrap().code == UCode::NOT_FOUND.into());
+        assert!(up_client
+            .remove_listener(topic_filter, listener.clone())
+            .await
+            .is_err_and(|err| err.get_code() == UCode::NOT_FOUND));
     }
 
     #[test_case(
@@ -848,12 +663,10 @@ mod tests {
             .once()
             .return_const(Ok(()));
         let client = Mqtt5Transport {
-            mqtt_client: Box::new(client_operations),
-            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
-            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
+            mqtt_client: Arc::new(client_operations),
+            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
-            free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
             message_callback_handle: None,
         };
         assert!(client.connect().await.is_ok());
@@ -867,12 +680,10 @@ mod tests {
             .once()
             .return_const(());
         let client = Mqtt5Transport {
-            mqtt_client: Box::new(client_operations),
-            subscription_topics: Arc::new(RwLock::new(HashMap::new())),
-            topic_listeners: Arc::new(RwLock::new(TopicMatcher::new())),
+            mqtt_client: Arc::new(client_operations),
+            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
-            free_subscription_ids: Arc::new(RwLock::new((1..10).collect())),
             message_callback_handle: None,
         };
         client.shutdown();
