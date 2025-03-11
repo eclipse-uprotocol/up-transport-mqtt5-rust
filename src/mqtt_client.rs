@@ -14,15 +14,13 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, RwLock,
-    },
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
 use async_channel::Receiver;
 use async_trait::async_trait;
+use backon::Retryable;
 #[cfg(feature = "cli")]
 use clap::Args;
 use log::{debug, trace};
@@ -293,7 +291,6 @@ pub(crate) struct PahoBasedMqttClientOperations {
     inner_mqtt_client: Arc<paho_mqtt::AsyncClient>,
     inbound_messages: Option<Receiver<Option<paho_mqtt::Message>>>,
     subscribed_topic_provider: Arc<tokio::sync::RwLock<dyn SubscribedTopicProvider>>,
-    reconnecting: AtomicBool,
     client_options: MqttClientOptions,
 }
 
@@ -344,7 +341,6 @@ impl PahoBasedMqttClientOperations {
                     inner_mqtt_client: Arc::new(async_client),
                     inbound_messages: Some(inbound_message_stream),
                     subscribed_topic_provider,
-                    reconnecting: AtomicBool::new(false),
                     client_options: options,
                 }
             })
@@ -487,59 +483,52 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
 
     // [impl->req~up-transport-mqtt5-reconnection~1]
     async fn reconnect(&self) {
-        if self
-            .reconnecting
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            debug!("Already trying to reestablish connection to MQTT broker");
-            return;
-        }
-
         if self.inner_mqtt_client.is_connected() {
-            debug!("skipping reconnection attempt, connection has already been reestablished...");
+            debug!("Skipping reconnection attempt, connection has already been reestablished...");
             return;
         }
 
         let mqtt_client = self.inner_mqtt_client.clone();
         let topic_provider = self.subscribed_topic_provider.clone();
 
-        let reconnect_outcome = tokio::spawn(async move {
-            let backoff_policy = backoff::ExponentialBackoffBuilder::new()
-                .with_initial_interval(Duration::from_millis(500))
-                .with_multiplier(2.0)
-                .with_randomization_factor(0.2)
-                .with_max_interval(Duration::from_secs(10))
-                .build();
-            match backoff::future::retry(backoff_policy, || async {
-                Ok(mqtt_client.reconnect().await?)
-            })
-            .await
-            {
-                Ok(response) => {
-                    debug!("Successfully reestablished connection to MQTT broker");
-                    if let Some(user_data) = mqtt_client.user_data() {
-                        // this will always be the case because we set the user data during
-                        // construction of the AsyncClient
-                        Self::handle_connect_response(user_data, response);
-                        if !Self::is_session_present(user_data) {
-                            // we only need to manually reestablish the subscriptions if
-                            // the server has not used any session state for the new connection
-                            let subscribed_topics = {
-                                let topic_provider_read = topic_provider.read().await;
-                                topic_provider_read.get_subscribed_topics()
-                            };
-                            Self::recreate_subscriptions(&mqtt_client, subscribed_topics).await;
-                        }
+        let backoff_builder = backon::ExponentialBuilder::new()
+            .with_factor(2.0)
+            .with_jitter()
+            .with_min_delay(Duration::from_millis(500))
+            .with_max_delay(Duration::from_secs(10))
+            .without_max_times();
+        match (|| {
+            debug!("Attempting to reestablish connecting to broker...");
+            mqtt_client.reconnect()
+        })
+        .retry(&backoff_builder)
+        .when(|err| {
+            debug!("Failed to reestablish connection to MQTT broker: {err}");
+            true
+        })
+        .await
+        {
+            Ok(response) => {
+                debug!("Successfully reestablished connection to MQTT broker");
+                if let Some(user_data) = mqtt_client.user_data() {
+                    // this will always be the case because we set the user data during
+                    // construction of the AsyncClient
+                    Self::handle_connect_response(user_data, response);
+                    if !Self::is_session_present(user_data) {
+                        // we only need to manually reestablish the subscriptions if
+                        // the server has not used any session state for the new connection
+                        let subscribed_topics = {
+                            let topic_provider_read = topic_provider.read().await;
+                            topic_provider_read.get_subscribed_topics()
+                        };
+                        Self::recreate_subscriptions(&mqtt_client, subscribed_topics).await;
                     }
                 }
-                Err(err) => {
-                    debug!("Failed to reestablish connection to MQTT broker: {err}");
-                }
             }
-        });
-        let _ = reconnect_outcome.await;
-        self.reconnecting.store(false, Ordering::Release);
+            Err(_err) => {
+                // we cannot reach this arm because we do not limit the number of attempts to connnect
+            }
+        }
     }
 
     fn disconnect(&self) {

@@ -18,6 +18,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use clap::{command, Parser};
 use log::{error, info};
 use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
@@ -58,12 +59,14 @@ async fn main() -> Result<(), UStatus> {
     )
     .await?;
 
-    backoff::future::retry(backoff::ExponentialBackoff::default(), || async {
+    (|| {
         info!("Connecting to broker...");
-        Ok(client
-            .connect()
-            .await
-            .inspect_err(|err| error!("Connection attempt failed: {err}"))?)
+        client.connect()
+    })
+    .retry(ExponentialBuilder::default())
+    .when(|err| {
+        error!("Connection attempt failed: {err}");
+        true
     })
     .await?;
 

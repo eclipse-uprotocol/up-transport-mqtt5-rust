@@ -13,6 +13,7 @@
 
 use std::{str::FromStr, time::SystemTime};
 
+use backon::{ExponentialBuilder, Retryable};
 use clap::{command, Parser};
 use log::{error, info};
 use up_rust::{UMessageBuilder, UPayloadFormat, UStatus, UTransport, UUri};
@@ -44,8 +45,14 @@ async fn main() -> Result<(), UStatus> {
     )
     .await?;
 
-    backoff::future::retry(backoff::ExponentialBackoff::default(), || async {
-        Ok(client.connect().await?)
+    (|| {
+        info!("Connecting to broker...");
+        client.connect()
+    })
+    .retry(ExponentialBuilder::default())
+    .when(|err| {
+        error!("Connection attempt failed: {err}");
+        true
     })
     .await?;
 
