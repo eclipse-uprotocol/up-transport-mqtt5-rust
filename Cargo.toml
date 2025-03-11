@@ -13,7 +13,6 @@
 
 [package]
 description = "The Eclipse uProtocol MQTT 5 Transport Library"
-documentation = "https://github.com/eclipse-uprotocol/up-spec"
 edition = "2021"
 exclude = [
     "tests/*",
@@ -41,7 +40,7 @@ async-channel = { version = "1.6" }
 async-trait = { version = "0.1" }
 backon = { version = "1.4", default-features = false, features = ["tokio-sleep"] }
 bytes = { version = "1.7" }
-clap = { version = "4.5", features = [
+clap = { version = "4.5", default-features = false, features = [
     "std",
     "derive",
     "env",
@@ -63,6 +62,7 @@ tokio = { version = "1.38", default-features = false, features = [
 up-rust = { version = "0.4.0", default-features = false }
 
 [dev-dependencies]
+env_logger = { version = "0.11" }
 mockall = { version = "0.13" }
 test-case = { version = "3.3" }
 tokio = { version = "1.38", default-features = false, features = [
@@ -74,7 +74,6 @@ tokio = { version = "1.38", default-features = false, features = [
 up-rust = { version = "0.4.0", default-features = false, features = [
     "test-util",
 ] }
-env_logger = { version = "0.11" }
 
 [[example]]
 name = "publisher_example"
@@ -83,3 +82,6 @@ required-features = ["cli"]
 [[example]]
 name = "subscriber_example"
 required-features = ["cli"]
+
+[package.metadata.docs.rs]
+all-features = true
