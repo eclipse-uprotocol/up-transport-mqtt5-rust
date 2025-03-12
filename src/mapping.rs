@@ -29,6 +29,7 @@ const KEY_TYPE: &str = "2";
 const KEY_SOURCE: &str = "3";
 const KEY_SINK: &str = "4";
 const KEY_PRIORITY: &str = "5";
+const KEY_TTL: &str = "6";
 const KEY_PERMISSION_LEVEL: &str = "7";
 const KEY_COMMSTATUS: &str = "8";
 const KEY_TOKEN: &str = "10";
@@ -102,16 +103,12 @@ pub(crate) fn create_mqtt_properties_from_uattributes(
         "Failed to add uProtocol major version to MQTT User Properties",
     )?;
 
-    // Add TTL to properties as message expiry interval
-    // Note that uProtocol message TTL is milliseconds but MQTT message expiry interval is seconds
-    if let Some(message_expiry_interval) = attributes
-        .ttl
-        .map(|message_expiry_interval| message_expiry_interval.div_ceil(1000))
-    {
+    // Add TTL
+    if let Some(ttl) = attributes.ttl {
         properties
             .push_u32(
                 paho_mqtt::PropertyCode::MessageExpiryInterval,
-                message_expiry_interval,
+                ttl.div_ceil(1000),
             )
             .map_err(|e| {
                 UStatus::fail_with_code(
@@ -119,6 +116,18 @@ pub(crate) fn create_mqtt_properties_from_uattributes(
                     format!("Failed to create Message Expiry Interval property: {e:?}"),
                 )
             })?;
+
+        if ttl % 1000 > 0 {
+            // TTL does not have full second granularity so we need to also add
+            // a dedicated user property to be able to recreate the original
+            // value at the receiving end
+            add_user_property(
+                &mut properties,
+                KEY_TTL,
+                ttl.to_string().as_str(),
+                "Failed to add TTL to MQTT User Properties",
+            )?;
+        }
     }
 
     add_user_property(
@@ -250,13 +259,6 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
     }
 
     let mut attributes = UAttributes {
-        // Add the TTL UAttribute from the MessageExpiryInterval if available
-        ttl: props
-            .get(paho_mqtt::PropertyCode::MessageExpiryInterval)
-            .and_then(|prop| prop.get_u32())
-            .and_then(|message_expiry_interval| {
-                message_expiry_interval.checked_mul(1000).or(Some(u32::MAX))
-            }),
         token: props.find_user_property(KEY_TOKEN),
         traceparent: props.find_user_property(KEY_TRACEPARENT),
         ..Default::default()
@@ -314,6 +316,22 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
                 )
             })
             .map(EnumOrUnknown::from)?;
+    }
+
+    if let Some(ttl_string) = props.find_user_property(KEY_TTL) {
+        // Add the TTL UAttribute from TTL user property if it is set
+        attributes.ttl = Some(ttl_string.parse::<u32>().map_err(|e| {
+            UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                format!("Failed to map UserProperty {KEY_TTL} to Message TTL: {e}"),
+            )
+        })?);
+    } else if let Some(message_expiry_interval) = props
+        .get(paho_mqtt::PropertyCode::MessageExpiryInterval)
+        .and_then(|prop| prop.get_u32())
+    {
+        // otherwise, fall back to the MessageExpiryInterval if available
+        attributes.ttl = message_expiry_interval.checked_mul(1000).or(Some(u32::MAX));
     }
 
     if let Some(permission_string) = props.find_user_property(KEY_PERMISSION_LEVEL) {
@@ -404,7 +422,7 @@ mod tests {
         source: Option<&str>,
         sink: Option<&str>,
         priority: Option<UPriority>,
-        message_expiry_interval: Option<u32>, // seconds
+        ttl: Option<u32>, // milliseconds
         perm_level: Option<u32>,
         commstatus: Option<UCode>,
         reqid: Option<&UUID>,
@@ -418,7 +436,7 @@ mod tests {
             source,
             sink,
             priority,
-            message_expiry_interval.map(|v| v * 1000),
+            ttl,
             perm_level,
             commstatus,
             reqid,
@@ -434,7 +452,7 @@ mod tests {
             source,
             sink,
             priority,
-            message_expiry_interval,
+            ttl,
             perm_level,
             commstatus,
             reqid,
@@ -492,7 +510,7 @@ mod tests {
         source: Option<&str>,
         sink: Option<&str>,
         priority: Option<UPriority>,
-        message_expiry_interval: Option<u32>, // seconds
+        ttl: Option<u32>, // milliseconds
         perm_level: Option<u32>,
         commstatus: Option<UCode>,
         reqid: Option<&UUID>,
@@ -555,10 +573,22 @@ mod tests {
                 )
                 .unwrap();
         }
-        if let Some(v) = message_expiry_interval {
+        if let Some(v) = ttl {
             properties
-                .push_u32(paho_mqtt::PropertyCode::MessageExpiryInterval, v)
+                .push_u32(
+                    paho_mqtt::PropertyCode::MessageExpiryInterval,
+                    v.div_ceil(1000),
+                )
                 .unwrap();
+            if v % 1000 > 0 {
+                properties
+                    .push_string_pair(
+                        paho_mqtt::PropertyCode::UserProperty,
+                        KEY_TTL,
+                        &v.to_string(),
+                    )
+                    .unwrap();
+            }
         }
         if let Some(perm_level_val) = perm_level {
             properties
@@ -653,10 +683,18 @@ mod tests {
         create_test_uattributes_and_properties(
             Some(CURRENT_UPROTOCOL_MAJOR_VERSION),
             Some(UMessageType::UMESSAGE_TYPE_NOTIFICATION),
-            Some(&UUID::build()),
+            Some(&UUID {
+                // timestamp: 1000ms since UNIX epoch
+                msb: 0x0000000010007000_u64,
+                lsb: 0x8010101010101a1a_u64,
+                ..Default::default()
+            }),
             Some("//VIN.vehicles/A8000/2/1A50"),
             Some("//VIN.vehicles/B8000/3/0"),
-            None, None, None, None, None, None,
+            None,
+            // do not expire
+            Some(0),
+            None, None, None, None,
             Some(MSG_TRACEPARENT),
             None
         ),
@@ -671,7 +709,7 @@ mod tests {
             Some("//VIN.vehicles/A8000/2/0"),
             Some("//VIN.vehicles/B8000/3/1B50"),
             Some(UPriority::UPRIORITY_CS4),
-            Some(5),
+            Some(5400),
             Some(MSG_PERMISSION_LEVEL),
             None, None,
             Some(MSG_TOKEN),
@@ -689,7 +727,8 @@ mod tests {
             Some("//VIN.vehicles/B8000/3/1B50"),
             Some("//VIN.vehicles/A8000/2/0"),
             Some(UPriority::UPRIORITY_CS4),
-            None, None,
+            Some(3000),
+            None,
             Some(UCode::UNIMPLEMENTED),
             Some(&UUID::build()),
             None,
@@ -709,7 +748,7 @@ mod tests {
             None, None, None, None, None, None, None, None, None
         ),
         Some(UCode::INVALID_ARGUMENT);
-        "for Publish message with invalid source URI"
+        "fails for Publish message with invalid source URI"
     )]
     #[test_case(
         create_test_uattributes_and_properties(
@@ -720,7 +759,7 @@ mod tests {
             None, None, None, None, None, None, None, None, None
         ),
         Some(UCode::INVALID_ARGUMENT);
-        "for Publish message with invalid uProtocol version"
+        "fails for Publish message with invalid uProtocol version"
     )]
     // [utest->dsn~up-transport-mqtt5-attributes-mapping~1]
     fn test_create_uattributes_from_mqtt_properties(
@@ -789,7 +828,7 @@ mod tests {
         Some("/A10D/4/0"),
         Some("/103/2/71A3"),
         Some(UPriority::UPRIORITY_CS4),
-        Some(2),
+        Some(2000),
         Some(MSG_PERMISSION_LEVEL),
         None,
         None,
@@ -804,7 +843,7 @@ mod tests {
         Some("/103/2/71A3"),
         Some("/A10D/4/0"),
         Some(UPriority::UPRIORITY_CS4),
-        Some(4),
+        Some(4150),
         None,
         Some(UCode::UNIMPLEMENTED),
         Some(&UUID::build()),
