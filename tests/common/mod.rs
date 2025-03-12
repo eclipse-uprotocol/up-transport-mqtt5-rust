@@ -26,7 +26,10 @@ pub async fn create_up_transport_mqtt<S: Into<String>>(
 
     Mqtt5Transport::new(TransportMode::InVehicle, config, authority_name.into()).await
 }
-/// starts a mosquitto docker container and returns the container and the host port
+/// Starts a mosquitto docker container and returns the container and the host port.
+/// 
+/// The returned [ContainerAsync] will stop and remove the Container
+/// when dropped
 pub async fn start_mosquitto() -> (ContainerAsync<GenericImage>, u16) {
     const MOSQUITTO_CONTAINER_PORT: u16 = 1883;
 
