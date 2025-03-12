@@ -28,7 +28,7 @@ pub async fn create_up_transport_mqtt<S: Into<String>>(
 }
 /// Starts a mosquitto docker container and returns the container and the host port.
 /// 
-/// The returned [ContainerAsync] will stop and remove the Container
+/// The returned [ContainerAsync] will stop and remove the Docker Container
 /// when dropped
 pub async fn start_mosquitto() -> (ContainerAsync<GenericImage>, u16) {
     const MOSQUITTO_CONTAINER_PORT: u16 = 1883;
