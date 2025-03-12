@@ -80,10 +80,12 @@ fn uuid_from_bytes<B: Into<Bytes>>(bytes: B) -> Result<UUID, UStatus> {
 /// Returns an error if the given meta data are invalid or cannot
 /// be mapped to MQTT properties.
 // [impl->dsn~up-transport-mqtt5-attributes-mapping~1]
+// [impl->dsn~utransport-send-preserve-data~1]
 pub(crate) fn create_mqtt_properties_from_uattributes(
     attributes: &UAttributes,
 ) -> Result<paho_mqtt::Properties, UStatus> {
     // No need to start conversion if attributes are invalid
+    // [impl->dsn~utransport-send-error-invalid-parameter~1]
     UAttributesValidators::get_validator_for_attributes(attributes)
         .validate(attributes)
         .map_err(|e| {
@@ -162,17 +164,20 @@ pub(crate) fn create_mqtt_properties_from_uattributes(
         )?
     };
 
-    if let Ok(prio) = attributes.priority.enum_value() {
-        // TODO: only include if not default priority
-        if prio != UPriority::UPRIORITY_UNSPECIFIED {
-            add_user_property(
-                &mut properties,
-                KEY_PRIORITY,
-                &prio.to_priority_code(),
-                "Failed to add message priority to MQTT User Properties",
-            )?
-        }
-    };
+    let prio = attributes.priority.enum_value().map_err(|v| {
+        UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            format!("message has unsupported priority code [{v}]"),
+        )
+    })?;
+    if prio != UPriority::UPRIORITY_UNSPECIFIED {
+        add_user_property(
+            &mut properties,
+            KEY_PRIORITY,
+            &prio.to_priority_code(),
+            "Failed to add message priority to MQTT User Properties",
+        )?
+    }
 
     if let Some(permission_level) = &attributes.permission_level {
         add_user_property(
@@ -248,6 +253,7 @@ pub(crate) fn create_mqtt_properties_from_uattributes(
 /// # Arguments
 /// * `props` - MQTT properties to get meta data from.
 // [impl->dsn~up-transport-mqtt5-attributes-mapping~1]
+// [impl->dsn~utransport-send-preserve-data~1]
 pub(crate) fn create_uattributes_from_mqtt_properties(
     props: &paho_mqtt::Properties,
 ) -> Result<UAttributes, UStatus> {
@@ -316,6 +322,11 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
                 )
             })
             .map(EnumOrUnknown::from)?;
+    } else {
+        // [impl->dsn~up-attributes-priority~1]
+        // it is sufficient to set to UNSPECIFIED because according to the spec,
+        // a message without a (concrete) priority, belongs to class CS1 by default
+        attributes.priority = EnumOrUnknown::from(UPriority::UPRIORITY_UNSPECIFIED);
     }
 
     if let Some(ttl_string) = props.find_user_property(KEY_TTL) {
@@ -390,14 +401,19 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
     }
 
     // Validate the reconstructed attributes
-    UAttributesValidators::get_validator_for_attributes(&attributes)
-        .validate(&attributes)
-        .map_err(|e| {
-            UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
-                format!("Failed to map message attributes: {e:?}"),
-            )
-        })?;
+    let validator = UAttributesValidators::get_validator_for_attributes(&attributes);
+    validator.validate(&attributes).map_err(|e| {
+        UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            format!("Failed to map message attributes: {e:?}"),
+        )
+    })?;
+
+    // [impl->dsn~up-attributes-ttl~1]
+    // [impl->dsn~up-attributes-ttl-timeout~1]
+    validator
+        .is_expired(&attributes)
+        .map_err(|_err| UStatus::fail_with_code(UCode::DEADLINE_EXCEEDED, "message has expired"))?;
 
     Ok(attributes)
 }
@@ -484,7 +500,7 @@ mod tests {
             commstatus: commstatus.map(EnumOrUnknown::from),
             id: id.map(|id| id.to_owned()).into(),
             payload_format: EnumOrUnknown::from(payload_format.unwrap_or_default()),
-            priority: EnumOrUnknown::from(priority.unwrap_or_default()),
+            priority: EnumOrUnknown::from(priority.unwrap_or(UPriority::UPRIORITY_UNSPECIFIED)),
             permission_level,
             reqid: reqid.map(|uuid| uuid.to_owned()).into(),
             source: source
@@ -564,7 +580,7 @@ mod tests {
                 .push_string_pair(paho_mqtt::PropertyCode::UserProperty, KEY_SINK, sink_val)
                 .unwrap();
         }
-        if let Some(priority_val) = priority {
+        if let Some(priority_val) = priority.filter(|v| *v != UPriority::UPRIORITY_UNSPECIFIED) {
             properties
                 .push_string_pair(
                     paho_mqtt::PropertyCode::UserProperty,
@@ -679,6 +695,8 @@ mod tests {
         None;
         "for valid Publish message"
     )]
+    // [utest->dsn~up-attributes-priority~1]
+    // [utest->dsn~up-attributes-ttl~1]
     #[test_case(
         create_test_uattributes_and_properties(
             Some(CURRENT_UPROTOCOL_MAJOR_VERSION),
@@ -701,6 +719,7 @@ mod tests {
         None;
         "for valid Notification"
     )]
+    // [utest->dsn~up-attributes-ttl-timeout~1]
     #[test_case(
         create_test_uattributes_and_properties(
             Some(CURRENT_UPROTOCOL_MAJOR_VERSION),
@@ -760,6 +779,28 @@ mod tests {
         ),
         Some(UCode::INVALID_ARGUMENT);
         "fails for Publish message with invalid uProtocol version"
+    )]
+    // [utest->dsn~up-attributes-ttl-timeout~1]
+    #[test_case(
+        create_test_uattributes_and_properties(
+            Some(CURRENT_UPROTOCOL_MAJOR_VERSION),
+            Some(UMessageType::UMESSAGE_TYPE_PUBLISH),
+            Some(&UUID {
+                // timestamp: 1000ms since UNIX epoch
+                msb: 0x0000000010007000_u64,
+                lsb: 0x8010101010101a1a_u64,
+                ..Default::default()
+            }),
+            Some("//VIN.vehicles/A8000/2/AA50"),
+            None,
+            None,
+            // message expiry interval: 12.5s
+            // i.e. this message has expired decades ago
+            Some(12500),
+            None, None, None, None, None, None
+        ),
+        Some(UCode::DEADLINE_EXCEEDED);
+        "fails for expired Publish message"
     )]
     // [utest->dsn~up-transport-mqtt5-attributes-mapping~1]
     fn test_create_uattributes_from_mqtt_properties(

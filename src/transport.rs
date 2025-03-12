@@ -19,10 +19,49 @@ use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
 
 use crate::Mqtt5Transport;
 
+pub(crate) fn verify_filter_criteria(
+    source_filter: &UUri,
+    sink_filter: Option<&UUri>,
+) -> Result<(), UStatus> {
+    if let Some(sink_filter_uuri) = sink_filter {
+        if sink_filter_uuri.is_notification_destination()
+            && source_filter.is_notification_destination()
+        {
+            return Err(UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                "source and sink filters must not both have resource ID 0",
+            ));
+        }
+        if sink_filter_uuri.is_rpc_method()
+            && !source_filter.has_wildcard_resource_id()
+            && !source_filter.is_notification_destination()
+        {
+            return Err(UStatus::fail_with_code(UCode::INVALID_ARGUMENT, "source filter must either have the wildcard resource ID or resource ID 0, if sink filter matches RPC method resource ID"));
+        }
+    } else if !source_filter.has_wildcard_resource_id() && !source_filter.is_event() {
+        return Err(UStatus::fail_with_code(UCode::INVALID_ARGUMENT, "source filter must either have the wildcard resource ID or a resource ID from topic range, if sink filter is empty"));
+    }
+    // everything else might match valid messages
+    Ok(())
+}
+
 #[async_trait]
 impl UTransport for Mqtt5Transport {
+    async fn receive(
+        &self,
+        _source_filter: &UUri,
+        _sink_filter: Option<&UUri>,
+    ) -> Result<UMessage, UStatus> {
+        // [impl->dsn~utransport-receive-error-unimplemented~1]
+        Err(UStatus::fail_with_code(
+            UCode::UNIMPLEMENTED,
+            "not implemented",
+        ))
+    }
+
     async fn send(&self, message: UMessage) -> Result<(), UStatus> {
         // validate message
+        // [impl->dsn~utransport-send-error-invalid-parameter~1]
         let attributes = message.attributes.as_ref().ok_or(UStatus::fail_with_code(
             UCode::INVALID_ARGUMENT,
             "uProtocol message has no attributes",
@@ -35,12 +74,16 @@ impl UTransport for Mqtt5Transport {
         self.send_message(attributes, payload).await
     }
 
+    // [impl->dsn~utransport-supported-message-delivery~1]
+    // [impl->dsn~utransport-registerlistener-error-unimplemented~1]
     async fn register_listener(
         &self,
         source_filter: &UUri,
         sink_filter: Option<&UUri>,
         listener: Arc<dyn UListener>,
     ) -> Result<(), UStatus> {
+        // [impl->dsn~utransport-registerlistener-error-invalid-parameter~1]
+        verify_filter_criteria(source_filter, sink_filter)?;
         let topic = self
             .to_mqtt_topic_string(source_filter, sink_filter)
             .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
@@ -48,12 +91,16 @@ impl UTransport for Mqtt5Transport {
         self.add_listener(&topic, listener).await
     }
 
+    // [impl->dsn~utransport-supported-message-delivery~1]
+    // [impl->dsn~utransport-unregisterlistener-error-unimplemented~1]
     async fn unregister_listener(
         &self,
         source_filter: &UUri,
         sink_filter: Option<&UUri>,
         listener: Arc<dyn UListener>,
     ) -> Result<(), UStatus> {
+        // [impl->dsn~utransport-unregisterlistener-error-invalid-parameter~1]
+        verify_filter_criteria(source_filter, sink_filter)?;
         let topic: String = self
             .to_mqtt_topic_string(source_filter, sink_filter)
             .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
@@ -66,17 +113,20 @@ impl UTransport for Mqtt5Transport {
 mod tests {
     use std::str::FromStr;
 
+    use bytes::Bytes;
     use mockall::predicate::{always, eq};
+    use protobuf::{EnumOrUnknown, MessageField};
     use up_rust::{
-        ComparableListener, MockUListener, UMessageBuilder, UMessageType, UPayloadFormat, UUID,
+        ComparableListener, MockUListener, UAttributes, UMessageBuilder, UMessageType,
+        UPayloadFormat, UUID,
     };
 
     use test_case::test_case;
     use tokio::sync::RwLock;
 
     use crate::{
-        listener_registry::RegisteredListeners, mqtt_client::MockMqttClientOperations,
-        TransportMode,
+        listener_registry::RegisteredListeners, mapping::create_uattributes_from_mqtt_properties,
+        mqtt_client::MockMqttClientOperations, TransportMode,
     };
 
     use super::*;
@@ -86,13 +136,14 @@ mod tests {
         message_type: UMessageType,
         source: &str,
         sink: Option<&str>,
-        payload: String,
+        payload: &str,
     ) -> UMessage {
         let source_uri = UUri::from_str(source).expect("Expected a valid source value");
 
         match message_type {
             UMessageType::UMESSAGE_TYPE_PUBLISH => UMessageBuilder::publish(source_uri)
-                .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
+                .with_priority(up_rust::UPriority::UPRIORITY_CS1)
+                .build_with_payload(payload.to_string(), UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
                 .unwrap(),
             UMessageType::UMESSAGE_TYPE_REQUEST => {
                 let sink_uri =
@@ -100,7 +151,8 @@ mod tests {
                         .expect("Expected a valid sink value");
 
                 UMessageBuilder::request(sink_uri, source_uri, 3600)
-                    .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
+                    .with_priority(up_rust::UPriority::UPRIORITY_CS4)
+                    .build_with_payload(payload.to_string(), UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
                     .unwrap()
             }
             UMessageType::UMESSAGE_TYPE_RESPONSE => {
@@ -109,7 +161,8 @@ mod tests {
                         .expect("Expected a valid sink value");
 
                 UMessageBuilder::response(sink_uri, UUID::build(), source_uri)
-                    .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
+                    .with_priority(up_rust::UPriority::UPRIORITY_CS4)
+                    .build_with_payload(payload.to_string(), UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
                     .unwrap()
             }
             UMessageType::UMESSAGE_TYPE_NOTIFICATION => {
@@ -118,7 +171,8 @@ mod tests {
                         .expect("Expected a valid sink value");
 
                 UMessageBuilder::notification(source_uri, sink_uri)
-                    .build_with_payload(payload, UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
+                    .with_priority(up_rust::UPriority::UPRIORITY_CS1)
+                    .build_with_payload(payload.to_string(), UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
                     .unwrap()
             }
             _ => panic!("Invalid message type"),
@@ -126,76 +180,127 @@ mod tests {
     }
 
     #[test_case(
-        UMessageType::UMESSAGE_TYPE_PUBLISH,
-        "//VIN.vehicles/A8000/2/8A50",
-        None,
-        "payload",
+        create_test_message(
+            UMessageType::UMESSAGE_TYPE_PUBLISH,
+            "//VIN.vehicles/A8000/2/8A50",
+            None,
+            "payload",
+        ),
         "VIN.vehicles/8000/A/2/8A50",
+        None,
         None;
         "succeeds for Publish message"
     )]
+    // [utest->dsn~utransport-send-error-invalid-parameter~1]
     #[test_case(
-        UMessageType::UMESSAGE_TYPE_PUBLISH,
-        "//VIN.vehicles/A8000/2/8A50",
+        UMessage {
+            attributes: Some(UAttributes {
+                type_: EnumOrUnknown::from(UMessageType::UMESSAGE_TYPE_PUBLISH),
+                // Publish message must have source field
+                source: MessageField::none(),
+                ..Default::default()
+            }).into(),
+            ..Default::default()
+        },
+        "",
         None,
-        "payload",
+        Some(UCode::INVALID_ARGUMENT);
+        "fails for invalid message"
+    )]
+    #[test_case(
+        create_test_message(
+            UMessageType::UMESSAGE_TYPE_PUBLISH,
+            "//VIN.vehicles/A8000/2/8A50",
+            None,
+            "payload",
+        ),
         "VIN.vehicles/8000/A/2/8A50",
+        Some(UCode::UNAVAILABLE),
         Some(UCode::UNAVAILABLE);
         "fails if not connected to broker"
     )]
     #[test_case(
-        UMessageType::UMESSAGE_TYPE_NOTIFICATION,
-        "/A8000/2/1A50",
-        Some("//VIN.vehicles/B8000/3/0"),
-        "payload",
+        create_test_message(
+            UMessageType::UMESSAGE_TYPE_NOTIFICATION,
+            "/A8000/2/1A50",
+            Some("//VIN.vehicles/B8000/3/0"),
+            "payload",
+        ),
         "VIN.vehicles/8000/A/2/1A50/VIN.vehicles/8000/B/3/0",
+        None,
         None;
         "succeeds for Notification message"
     )]
     #[test_case(
-        UMessageType::UMESSAGE_TYPE_REQUEST,
-        "//VIN.vehicles/A8000/2/0",
-        Some("//VIN.vehicles/B8000/3/10AB"),
-        "payload",
+        create_test_message(
+            UMessageType::UMESSAGE_TYPE_REQUEST,
+            "//VIN.vehicles/A8000/2/0",
+            Some("//VIN.vehicles/B8000/3/10AB"),
+            "payload",
+        ),
         "VIN.vehicles/8000/A/2/0/VIN.vehicles/8000/B/3/10AB",
+        None,
         None;
         "succeeds for Request message"
     )]
     #[test_case(
-        UMessageType::UMESSAGE_TYPE_RESPONSE,
-        "//VIN.vehicles/B8000/3/10AB",
-        Some("//VIN.vehicles/A8000/2/0"),
-        "payload",
+        create_test_message(
+            UMessageType::UMESSAGE_TYPE_RESPONSE,
+            "//VIN.vehicles/B8000/3/10AB",
+            Some("//VIN.vehicles/A8000/2/0"),
+            "payload",
+        ),
         "VIN.vehicles/8000/B/3/10AB/VIN.vehicles/8000/A/2/0",
+        None,
         None;
         "succeeds for Response message"
     )]
     #[tokio::test]
     async fn test_send(
-        message_type: UMessageType,
-        source: &str,
-        sink: Option<&str>,
-        payload: &str,
+        message_to_send: UMessage,
         expected_topic: &str,
+        mqtt_client_error: Option<UCode>,
         expected_error_code: Option<UCode>,
     ) {
-        let expected_payload = payload.to_string();
+        let sent_message = message_to_send.clone();
         let owned_topic = expected_topic.to_string();
         let mut client_operations = MockMqttClientOperations::new();
-        client_operations
-            .expect_publish()
-            .once()
-            .withf(move |msg| {
-                // [utest->dsn~up-transport-mqtt5-e2e-topic-names~1]
-                msg.topic() == owned_topic &&
-                // [utest->dsn~up-transport-mqtt5-payload-mapping~1]
-                msg.payload() == expected_payload.as_bytes()
-            })
-            .returning(move |_msg| {
-                expected_error_code.map_or(Ok(()), |code| {
-                    Err(UStatus::fail_with_code(code, "failed to send message"))
+        if expected_error_code.is_some() && mqtt_client_error.is_some()
+            || expected_error_code.is_none() && mqtt_client_error.is_none()
+        {
+            client_operations
+                .expect_publish()
+                .once()
+                .withf(move |msg| {
+                    // [utest->dsn~up-transport-mqtt5-e2e-topic-names~1]
+                    assert_eq!(
+                        msg.topic(),
+                        owned_topic,
+                        "MQTT message has unexpected topic"
+                    );
+                    // now check if we can recreate the original message from the MQTT message
+                    let attributes = create_uattributes_from_mqtt_properties(msg.properties()).ok();
+                    // [utest->dsn~up-transport-mqtt5-payload-mapping~1]
+                    let payload = if msg.payload().is_empty() {
+                        None
+                    } else {
+                        Some(Bytes::copy_from_slice(msg.payload()))
+                    };
+                    let umessage = UMessage {
+                        attributes: attributes.into(),
+                        payload,
+                        ..Default::default()
+                    };
+                    // [utest->dsn~utransport-send-preserve-data~1]
+                    assert_eq!(umessage, sent_message);
+                    true
                 })
-            });
+                .returning(move |_msg| {
+                    mqtt_client_error.map_or(Ok(()), |code| {
+                        Err(UStatus::fail_with_code(code, "failed to send message"))
+                    })
+                });
+        }
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
@@ -204,7 +309,6 @@ mod tests {
             message_callback_handle: None,
         };
 
-        let message_to_send = create_test_message(message_type, source, sink, payload.to_string());
         let send_result = client.send(message_to_send).await;
 
         if let Some(error_code) = expected_error_code {
@@ -214,10 +318,12 @@ mod tests {
         }
     }
 
+    // [utest->dsn~utransport-registerlistener-error-unimplemented~1]
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         None,
         "VIN.vehicles/8000/A/2/8A50".to_string(),
+        None,
         None;
         "succeeds for source filter"
     )]
@@ -225,6 +331,7 @@ mod tests {
         "//VIN.vehicles/A8000/2/8A50",
         None,
         "VIN.vehicles/8000/A/2/8A50".to_string(),
+        Some(UCode::UNAVAILABLE),
         Some(UCode::UNAVAILABLE);
         "fails if not connected to broker"
     )]
@@ -232,14 +339,17 @@ mod tests {
         "//VIN.vehicles/FFFF8000/2/8A50",
         Some("//VIN.vehicles/B8000/3/0"),
         "VIN.vehicles/8000/+/2/8A50/VIN.vehicles/8000/B/3/0".to_string(),
+        None,
         None;
         "succeeds for source and sink filter"
     )]
     #[tokio::test]
+    // [utest->dsn~utransport-supported-message-delivery~1]
     async fn test_register_listener(
         source_filter: &str,
         sink_filter: Option<&str>,
         expected_topic_filter: String,
+        mqtt_client_error: Option<UCode>,
         expected_error_code: Option<UCode>,
     ) {
         let mut client_operations = MockMqttClientOperations::new();
@@ -249,7 +359,7 @@ mod tests {
             // [utest->dsn~up-transport-mqtt5-e2e-topic-names~1]
             .with(eq(expected_topic_filter.clone()), always())
             .returning(move |_topic_filter, _subscription_id| {
-                expected_error_code.map_or(Ok(()), |code| {
+                mqtt_client_error.map_or(Ok(()), |code| {
                     Err(UStatus::fail_with_code(code, "failed to send message"))
                 })
             });
@@ -267,7 +377,7 @@ mod tests {
         let source_uri = UUri::from_str(source_filter).expect("Expected a valid source value");
         let sink_uri = sink_filter.map(|s| UUri::from_str(s).expect("Expected a valid sink value"));
 
-        let send_result = client
+        let register_result = client
             .register_listener(&source_uri, sink_uri.as_ref(), listener.clone())
             .await;
 
@@ -277,14 +387,85 @@ mod tests {
             .determine_listeners_for_topic(&expected_topic_filter);
 
         if let Some(error_code) = expected_error_code {
-            assert!(send_result.is_err_and(|err| err.get_code() == error_code));
+            assert!(register_result.is_err_and(|err| err.get_code() == error_code));
             assert!(listeners_for_expected_topic.is_empty());
         } else {
-            assert!(send_result.is_ok());
+            assert!(
+                register_result.is_ok(),
+                "registration failed: {:?}",
+                register_result
+            );
             assert!(listeners_for_expected_topic.contains(&ComparableListener::new(listener)));
         }
     }
 
+    #[test_case(
+        "//VIN.vehicles/FFFF8000/2/0",
+        None;
+        "for empty sink filter with source resource ID 0"
+    )]
+    #[test_case(
+        "//VIN.vehicles/FFFFFFFF/2/7FFF",
+        None;
+        "for empty sink filter with RPC method source resource ID"
+    )]
+    #[test_case(
+        "//VIN.vehicles/FFFFA000/2/0",
+        Some("//VIN.vehicles/FFFFFFFF/3/0");
+        "for source and sink filter having resource ID 0"
+    )]
+    #[test_case(
+        "//VIN.vehicles/A000/2/5555",
+        Some("//VIN.vehicles/B8000/3/1A00");
+        "for RPC sink and source having RPC method resource ID"
+    )]
+    #[test_case(
+        "//VIN.vehicles/FFFFFFFF/2/B100",
+        Some("//VIN.vehicles/B8000/3/1A00");
+        "for RPC sink and source having event resource ID"
+    )]
+    #[tokio::test]
+    async fn test_un_register_listener_fails_with_invalid_argument(
+        source_filter: &str,
+        sink_filter: Option<&str>,
+    ) {
+        let mut client_operations = MockMqttClientOperations::new();
+        client_operations.expect_subscribe().never();
+
+        let client = Mqtt5Transport {
+            mqtt_client: Arc::new(client_operations),
+            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
+            authority_name: "VIN.vehicles".to_string(),
+            mode: TransportMode::InVehicle,
+            message_callback_handle: None,
+        };
+
+        // [utest->dsn~utransport-registerlistener-error-invalid-parameter~1]
+        assert!(client
+            .register_listener(
+                &UUri::from_str(source_filter).expect("Expected a valid source value"),
+                sink_filter
+                    .map(|s| UUri::from_str(s).expect("Expected a valid sink value"))
+                    .as_ref(),
+                Arc::new(MockUListener::new())
+            )
+            .await
+            .is_err_and(|err| err.get_code() == UCode::INVALID_ARGUMENT));
+
+        // [utest->dsn~utransport-unregisterlistener-error-invalid-parameter~1]
+        assert!(client
+            .unregister_listener(
+                &UUri::from_str(source_filter).expect("Expected a valid source value"),
+                sink_filter
+                    .map(|s| UUri::from_str(s).expect("Expected a valid sink value"))
+                    .as_ref(),
+                Arc::new(MockUListener::new())
+            )
+            .await
+            .is_err_and(|err| err.get_code() == UCode::INVALID_ARGUMENT));
+    }
+
+    // [utest->dsn~utransport-unregisterlistener-error-unimplemented~1]
     #[test_case(
         "//VIN.vehicles/A8000/2/8A50",
         None,
@@ -307,6 +488,7 @@ mod tests {
         "succeeds for source and sink filter"
     )]
     #[tokio::test]
+    // [utest->dsn~utransport-supported-message-delivery~1]
     async fn test_unregister_listener(
         source_filter: &str,
         sink_filter: Option<&str>,
@@ -372,5 +554,28 @@ mod tests {
                 .await;
             assert!(empty_result.is_err_and(|err| { err.get_code() == UCode::NOT_FOUND }));
         }
+    }
+
+    #[tokio::test]
+    async fn test_receive_fails() {
+        let client_operations = MockMqttClientOperations::new();
+
+        let client = Mqtt5Transport {
+            mqtt_client: Arc::new(client_operations),
+            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
+            authority_name: "VIN.vehicles".to_string(),
+            mode: TransportMode::InVehicle,
+            message_callback_handle: None,
+        };
+        // [utest->dsn~utransport-receive-error-unimplemented~1]
+        assert!(client
+            .receive(
+                &"up://some_device/A100/1/9100"
+                    .parse()
+                    .expect("failed to create source UUri"),
+                None
+            )
+            .await
+            .is_err_and(|err| err.get_code() == UCode::UNIMPLEMENTED));
     }
 }

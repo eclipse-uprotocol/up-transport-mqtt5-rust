@@ -70,7 +70,7 @@ Run the Publisher with options appropriate for your MQTT broker. When using the 
 cargo run --example publisher_example
 ```
 
-### Using the Library
+## Using the Library
 
 Most developers will want to create an instance of the *Mqtt5Transport* struct and use it with the Communication Level API and its default implementation
 which are provided by the *up-rust* library.
@@ -91,3 +91,52 @@ The library contains the following modules:
 | --------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | transport | [uP-L1 Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/main/up-l1/README.adoc) | Implementation of MQTT5 uTransport client used for bidirectional point-2-point communication between uEs. |
 
+### Supported Message Priority Levels
+`uman~utransport-send-ignore-priority~1`
+
+The `Mqtt5Transport::send` function always uses a standard MQTT 5 PUBLISH packet to transfer the message to the MQTT broker regardless of the service class set on a uProtocol message.
+
+Covers:
+- req~utransport-send-qos-mapping~1
+
+### Supported Message Delivery Methods
+`uman~utransport-supported-message-delivery~1`
+
+The MQTT 5 transport provided by this crate supports the [push delivery method](https://github.com/eclipse-uprotocol/up-spec/blob/main/basics/delivery.adoc#2-event-delivery-methods) only.
+The `Mqtt5Transport::receive` function therefore always returns `UCode::UNIMPLEMENTED`.
+
+Covers:
+- `req~utransport-delivery-methods~1`
+
+### Maximum number of listeners
+`uman~max-listeners-configuration~1`
+
+The MQTT 5 transport provided by this crate can be configured with the maximum number of filter patterns that listeners can be registered for by means of the `MqttClientOptions` struct that is being passed into `Mqtt5Transport::new`.
+Please refer to the [API Documentation](https://docs.rs/up-transport-mqtt5/) for details.
+
+Covers:
+- `req~utransport-registerlistener-max-listeners~1`
+
+## Design
+
+### Message Priority Mapping
+`dsn~utransport-send-ignore-priority~1`
+
+The MQTT 5 standard does not define any mechanism for message prioritization. All messages are being processed with the same priority.
+Consequently, the MQTT 5 transport provided by this crate simply ignores the service class set on a uProtocol message being sent.
+
+Covers:
+- `req~utransport-send-qos-mapping~1`
+
+### Message Delivery
+`dsn~utransport-supported-message-delivery~1`
+
+All messages are being received by means of subscribing to relevant topics on the MQTT broker and delivering the messages to listeners that have been registered via `Mqtt5Transport::register_listener`.
+
+Rationale:
+The MQTT 5 standard does not provide means to poll the broker for messages but only supports the push model by means of clients subscribing to topic filters.
+
+Covers:
+- `req~utransport-delivery-methods~1`
+
+Needs: impl, utest
