@@ -14,7 +14,7 @@
 # Comprehensive combination of checks, linting, feature-checks, testing to be run on merge and on PR
 # Upload test results for potential re-use in publication workflow, returns the corresponding download URL as an output on workflow_call
 
-name: Cargo
+name: Cargo check and clippy
 
 on:
   push:
