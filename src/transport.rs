@@ -198,7 +198,7 @@ mod tests {
             });
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
-            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
+            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -254,7 +254,7 @@ mod tests {
                 })
             });
 
-        let registered_listeners = Arc::new(RwLock::new(RegisteredListeners::new(10)));
+        let registered_listeners = Arc::new(RwLock::new(RegisteredListeners::default()));
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: registered_listeners.clone(),
@@ -326,7 +326,7 @@ mod tests {
             });
 
         let listener = Arc::new(MockUListener::new());
-        let registered_listeners = Arc::new(RwLock::new(RegisteredListeners::new(10)));
+        let registered_listeners = Arc::new(RwLock::new(RegisteredListeners::default()));
         assert!(registered_listeners
             .write()
             .await
