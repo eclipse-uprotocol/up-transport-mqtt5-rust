@@ -70,7 +70,7 @@ Run the Publisher with options appropriate for your MQTT broker. When using the 
 cargo run --example publisher_example
 ```
 
-### Using the Library
+## Using the Library
 
 Most developers will want to create an instance of the *Mqtt5Transport* struct and use it with the Communication Level API and its default implementation
 which are provided by the *up-rust* library.
@@ -79,8 +79,8 @@ The libraries need to be added to the `[dependencies]` section of the `Cargo.tom
 
 ```toml
 [dependencies]
-up-rust = { version = "0.4" }
-up-transport-mqtt5 = { version = "0.2" }
+up-rust = { version = "0.5" }
+up-transport-mqtt5 = { version = "0.3" }
 ```
 
 Please refer to the [publisher_example](/examples/publisher_example.rs) and [subscriber_example](/examples/subscriber_example.rs) to see how to initialize and use the transport.
@@ -91,3 +91,11 @@ The library contains the following modules:
 | --------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | transport | [uP-L1 Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/main/up-l1/README.adoc) | Implementation of MQTT5 uTransport client used for bidirectional point-2-point communication between uEs. |
 
+### Maximum number of listeners
+`uman~max-listeners-configuration~1`
+
+The MQTT 5 transport provided by this crate can be configured with the maximum number of filter patterns that listeners can be registered for by means of the `MqttTransportOptions` struct that is being passed into `Mqtt5Transport::new`.
+Please refer to the [API Documentation](https://docs.rs/up-transport-mqtt5/) for details.
+
+Covers:
+- `req~utransport-registerlistener-max-listeners~1`
