@@ -399,7 +399,7 @@ impl PahoBasedMqttClientOperations {
                     .properties()
                     .get(paho_mqtt::PropertyCode::SubscriptionIdentifiersAvailable)
                     .and_then(|p| p.get_byte())
-                    .map_or(true, |v| v == 1);
+                    .is_none_or(|v| v == 1);
                 debug!(
                     "subscription IDs supported: {}",
                     props.subscription_ids_supported
