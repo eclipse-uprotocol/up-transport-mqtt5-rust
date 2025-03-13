@@ -104,6 +104,11 @@ impl RegisteredListeners {
 
     /// Adds a listener for a given topic filter.
     ///
+    /// The same listener instance can be registered using multiple topic filters.
+    /// The listener will be invoked once per message for each distinct topic filter that
+    /// the listener has been registered for and which matches the topic that the message
+    /// has been published to.
+    ///
     /// # Returns
     ///
     /// A newly assigned subscription identifier to be used for subscribing to the topic
@@ -120,6 +125,9 @@ impl RegisteredListeners {
     ) -> Result<Option<SubscriptionIdentifier>, UStatus> {
         let comp_listener = ComparableListener::new(listener);
 
+        // [impl->dsn~utransport-registerlistener-idempotent~1]
+        // [impl->dsn~utransport-registerlistener-listener-reuse~1]
+        // [impl->dsn~utransport-registerlistener-number-of-listeners~1]
         if let Some(listeners) = self.topic_listeners.get_mut(topic_filter) {
             debug!(
                 "Adding listener to existing subscription [topic filter: {}",
@@ -242,8 +250,8 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_add_listener() {
+    #[test]
+    fn test_add_listener() {
         let topic_filter = "+/local_authority";
         let topic = "remote_authority/local_authority";
         let listener = Arc::new(MockUListener::new());
@@ -255,7 +263,7 @@ mod tests {
             .is_empty());
 
         let subscription_id = registered_listeners
-            .add_listener(topic_filter, listener)
+            .add_listener(topic_filter, listener.clone())
             .expect("Failed to register listener")
             .expect("Did not create new subscription ID");
 
@@ -264,10 +272,73 @@ mod tests {
         assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
         let listeners = registered_listeners.determine_listeners_for_topic(topic);
         assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
+
+        // [utest->dsn~utransport-registerlistener-idempotent~1]
+        assert!(registered_listeners
+            .add_listener(topic_filter, listener.clone())
+            .expect("Failed to register listener")
+            .is_none());
+        assert!(registered_listeners
+            .add_listener(topic_filter, listener.clone())
+            .expect("Failed to register listener")
+            .is_none());
+
+        let listeners = registered_listeners.determine_listeners_for_topic(topic);
+        assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
+
+        // [utest->dsn~utransport-registerlistener-number-of-listeners~1]
+        let other_listener = Arc::new(MockUListener::new());
+        let expected_other_listener = ComparableListener::new(other_listener.clone());
+        assert_ne!(expected_listener, expected_other_listener);
+        assert!(registered_listeners
+            .add_listener(topic_filter, other_listener)
+            .expect("Failed to register listener")
+            .is_none());
+        let listeners = registered_listeners.determine_listeners_for_topic(topic);
+        assert!(
+            listeners.len() == 2
+                && listeners.contains(&expected_listener)
+                && listeners.contains(&expected_other_listener)
+        );
     }
 
-    #[tokio::test]
-    async fn test_remove_listener() {
+    #[test]
+    // [utest->dsn~utransport-registerlistener-listener-reuse~1]
+    fn test_add_listener_supports_multi_topic_registration() {
+        let topic_1 = "remote_authority_1/local_authority";
+        let topic_2 = "remote_authority_2/local_authority";
+
+        let listener = Arc::new(MockUListener::new());
+        let expected_listener = ComparableListener::new(listener.clone());
+        let mut registered_listeners = RegisteredListeners::new(2);
+
+        assert!(registered_listeners
+            .determine_listeners_for_topic(topic_1)
+            .is_empty());
+        assert!(registered_listeners
+            .determine_listeners_for_topic(topic_2)
+            .is_empty());
+
+        let subscription_id_1 = registered_listeners
+            .add_listener(topic_1, listener.clone())
+            .expect("Failed to register listener")
+            .expect("Did not create new subscription ID");
+        let subscription_id_2 = registered_listeners
+            .add_listener(topic_2, listener.clone())
+            .expect("Failed to register listener")
+            .expect("Did not create new subscription ID");
+
+        let listeners = registered_listeners
+            .determine_listeners_for_subscription_ids(&[subscription_id_1, subscription_id_2]);
+        assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
+        let listeners = registered_listeners.determine_listeners_for_topic(topic_1);
+        assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
+        let listeners = registered_listeners.determine_listeners_for_topic(topic_2);
+        assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
+    }
+
+    #[test]
+    fn test_remove_listener() {
         let topic_filter = "+/local_authority";
         let listener_1 = Arc::new(MockUListener::new());
         let comparable_listener_1 = ComparableListener::new(listener_1.clone());
@@ -314,8 +385,8 @@ mod tests {
         assert!(!registered_listeners.remove_listener(topic_filter, listener_2.clone()));
     }
 
-    #[tokio::test]
-    async fn test_get_free_subscription_id() {
+    #[test]
+    fn test_get_free_subscription_id() {
         let mut registered_listeners = RegisteredListeners::new(2);
 
         let expected_vals: Vec<SubscriptionIdentifier> = registered_listeners
@@ -342,8 +413,8 @@ mod tests {
         assert!(registered_listeners.get_free_subscription_id().is_err());
     }
 
-    #[tokio::test]
-    async fn test_release_subscription_id() {
+    #[test]
+    fn test_release_subscription_id() {
         let mut registered_listeners = RegisteredListeners::new(2);
         let subscription_id = registered_listeners
             .get_free_subscription_id()

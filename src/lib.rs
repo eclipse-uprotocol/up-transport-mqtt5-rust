@@ -327,9 +327,7 @@ impl Mqtt5Transport {
         let mut msg_builder = mqtt::MessageBuilder::new()
             .topic(topic.clone())
             .properties(props)
-            // The uProtocol spec does not mandate a particular MQTT QoS to use.
-            // QoS 1 makes sure that the message is transferred to the MQTT broker
-            // at least once.
+            // QoS 1 makes sure that we notice if the transfer to the MQTT broker fails
             .qos(QOS_1);
 
         if let Some(data) = payload {
@@ -410,6 +408,7 @@ impl Mqtt5Transport {
         if registered_listeners_write.remove_listener(topic_filter, listener) {
             Ok(())
         } else {
+            // [impl->dsn~utransport-unregisterlistener-error-notfound~1]
             Err(UStatus::fail_with_code(
                 UCode::NOT_FOUND,
                 format!("No such listener registered for topic filter [{topic_filter}]"),
@@ -503,6 +502,7 @@ mod tests {
             .await
             .is_ok());
 
+        // [utest->dsn~utransport-unregisterlistener-error-notfound~1]
         assert!(up_client
             .remove_listener(topic_filter, listener.clone())
             .await
