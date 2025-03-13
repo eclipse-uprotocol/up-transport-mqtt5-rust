@@ -28,7 +28,7 @@ license = "Apache-2.0"
 name = "up-transport-mqtt5"
 readme = "README.md"
 repository = "https://github.com/eclipse-uprotocol/up-client-mqtt5-rust"
-rust-version = "1.81"
+rust-version = "1.82"
 version = "0.3.0-SNAPSHOT"
 
 [features]
@@ -39,7 +39,7 @@ cli = ["clap"]
 async-channel = { version = "1.6" }
 async-trait = { version = "0.1" }
 backon = { version = "1.4", default-features = false, features = ["tokio-sleep"] }
-bytes = { version = "1.7" }
+bytes = { version = "1.10.1" }
 clap = { version = "4.5", default-features = false, features = [
     "std",
     "derive",
@@ -52,26 +52,26 @@ clap = { version = "4.5", default-features = false, features = [
 ], optional = true }
 futures = { version = "0.3" }
 log = { version = "0.4" }
-paho-mqtt = { version = "0.13.0", features = ["vendored-ssl"] }
-protobuf = { version = "3.3" }
-tokio = { version = "1.38", default-features = false, features = [
+paho-mqtt = { version = "0.13.1", features = ["vendored-ssl"] }
+protobuf = { version = "3.7.2" }
+tokio = { version = "1.44", default-features = false, features = [
     "rt",
     "rt-multi-thread",
     "sync"
 ] }
-up-rust = { version = "0.4.0", default-features = false }
+up-rust = { version = "0.5.0", default-features = false }
 
 [dev-dependencies]
-env_logger = { version = "0.11" }
+env_logger = { version = "0.11.7" }
 mockall = { version = "0.13" }
 test-case = { version = "3.3" }
-tokio = { version = "1.38", default-features = false, features = [
+tokio = { version = "1.44", default-features = false, features = [
     "macros",
     "rt",
     "rt-multi-thread",
     "sync"
 ] }
-up-rust = { version = "0.4.0", default-features = false, features = [
+up-rust = { version = "0.5.0", default-features = false, features = [
     "test-util",
 ] }
 

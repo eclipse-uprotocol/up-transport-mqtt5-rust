@@ -34,8 +34,3 @@ skip-tree = [
     { crate = "windows-sys", reason = "a foundational crate for many that bumps far too frequently to ever have a shared version" },
     { crate = "getrandom@0.2.15", reason = "an outdated version that is still used by some other crates we depend on" },
 ]
-
-[advisories]
-ignore = [
-    { id = "RUSTSEC-2024-0437", reason = "protobuf 3.7.2 is about to be released and includes a fix for this issue" }
-]
