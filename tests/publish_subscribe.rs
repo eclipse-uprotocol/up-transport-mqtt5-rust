@@ -18,9 +18,13 @@ use up_rust::{MockUListener, UMessageBuilder, UTransport, UUri};
 
 mod common;
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "should only be executed with an MQTT broker running"]
+#[tokio::test]
 async fn test_publish_and_subscribe() {
+    env_logger::init();
+
+    // fixture
+    let (_mosquitto, broker_port) = common::start_mosquitto().await;
+
     let payload = "test_payload";
     let expected_payload = payload.to_owned();
     let message_received = Arc::new(Notify::new());
@@ -31,7 +35,7 @@ async fn test_publish_and_subscribe() {
         message_received_clone.notify_one();
     });
 
-    let subscriber = common::create_up_transport_mqtt("Subscriber")
+    let subscriber = common::create_up_transport_mqtt("Subscriber", broker_port)
         .await
         .expect("failed to create transport at receiving end");
     subscriber
@@ -45,7 +49,7 @@ async fn test_publish_and_subscribe() {
         .await
         .unwrap();
 
-    let publisher = common::create_up_transport_mqtt("Publisher")
+    let publisher = common::create_up_transport_mqtt("Publisher", broker_port)
         .await
         .expect("failed to create transport at sending end");
     publisher
