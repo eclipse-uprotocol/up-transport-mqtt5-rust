@@ -411,8 +411,8 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
 
     // [impl->dsn~up-attributes-ttl~1]
     // [impl->dsn~up-attributes-ttl-timeout~1]
-    validator
-        .is_expired(&attributes)
+    attributes
+        .check_expired()
         .map_err(|_err| UStatus::fail_with_code(UCode::DEADLINE_EXCEEDED, "message has expired"))?;
 
     Ok(attributes)
