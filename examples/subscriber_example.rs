@@ -22,7 +22,7 @@ use backon::{ExponentialBuilder, Retryable};
 use clap::{command, Parser};
 use log::{error, info};
 use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
-use up_transport_mqtt5::{Mqtt5Transport, MqttClientOptions, TransportMode};
+use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions};
 
 struct LoggingListener {}
 
@@ -42,8 +42,9 @@ struct Command {
     /// The uProtocol filter URI to consume messages for.
     #[arg(value_name = "URI", env = "TOPIC_FILTER", default_value = "up://Vehicle_B/FFFFFFFF/FF/FFFF", value_parser = UUri::from_str)]
     topic_filter: UUri,
+
     #[command(flatten)]
-    mqtt_client_options: MqttClientOptions,
+    transport_options: Mqtt5TransportOptions,
 }
 
 #[tokio::main]
@@ -52,12 +53,7 @@ async fn main() -> Result<(), UStatus> {
 
     let command = Command::parse();
     let authority = command.topic_filter.authority_name.clone();
-    let client = Mqtt5Transport::new(
-        TransportMode::InVehicle,
-        command.mqtt_client_options,
-        authority,
-    )
-    .await?;
+    let client = Mqtt5Transport::new(command.transport_options, authority).await?;
 
     (|| {
         info!("Connecting to broker...");
