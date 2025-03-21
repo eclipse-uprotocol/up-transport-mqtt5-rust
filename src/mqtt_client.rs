@@ -41,8 +41,6 @@ const PARAM_MQTT_ENABLE_HOSTNAME_VERIFICATION: &str = "mqtt-enable-hostname-veri
 #[cfg(feature = "cli")]
 const PARAM_MQTT_KEY_STORE_PATH: &str = "mqtt-key-store-path";
 #[cfg(feature = "cli")]
-const PARAM_MQTT_MAX_SUBSCRIPTIONS: &str = "mqtt-max-subscriptions";
-#[cfg(feature = "cli")]
 const PARAM_MQTT_URI: &str = "mqtt-broker-uri";
 #[cfg(feature = "cli")]
 const PARAM_MQTT_USERNAME: &str = "mqtt-username";
@@ -60,7 +58,6 @@ const PARAM_MQTT_TRUST_STORE_PATH: &str = "mqtt-trust-store-path";
 const DEFAULT_BROKER_URI: &str = "mqtt://localhost:1883";
 const DEFAULT_CLEAN_START: bool = false;
 const DEFAULT_MAX_BUFFERED_MESSAGES: u16 = 0;
-const DEFAULT_MAX_SUBSCRIPTIONS: u16 = 50;
 const DEFAULT_SESSION_EXPIRY_INTERVAL: u32 = 0;
 
 static SUBSCRIPTION_RECREATION_IN_PROGRESS_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -79,10 +76,6 @@ pub struct MqttClientOptions {
     /// The maximum number of outbound messages that the transport can buffer locally.
     #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_BUFFER_SIZE, value_name = "SIZE", env = "MQTT_BUFFER_SIZE", default_value_t = DEFAULT_MAX_BUFFERED_MESSAGES))]
     pub max_buffered_messages: u16,
-
-    /// The maximum number of distinct topic filters that the transport supports.
-    #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_MAX_SUBSCRIPTIONS, value_name = "NUMBER", env = "MQTT_MAX_SUBSCRIPTIONS", default_value_t = DEFAULT_MAX_SUBSCRIPTIONS))]
-    pub max_subscriptions: u16,
 
     /// Indicates if the MQTT broker should start a new session (`true`) or resume an existing session
     /// when a connection has been established.
@@ -121,7 +114,6 @@ impl Default for MqttClientOptions {
     /// assert_eq!(options.broker_uri, "mqtt://localhost:1883");
     /// assert!(!options.clean_start);
     /// assert_eq!(options.max_buffered_messages, 0);
-    /// assert_eq!(options.max_subscriptions, 50);
     /// assert_eq!(options.session_expiry_interval, 0);
     /// assert!(options.username.is_none());
     /// assert!(options.password.is_none());
@@ -133,7 +125,6 @@ impl Default for MqttClientOptions {
             clean_start: DEFAULT_CLEAN_START,
             client_id: None,
             max_buffered_messages: DEFAULT_MAX_BUFFERED_MESSAGES,
-            max_subscriptions: DEFAULT_MAX_SUBSCRIPTIONS,
             password: None,
             session_expiry_interval: DEFAULT_SESSION_EXPIRY_INTERVAL,
             ssl_options: None,

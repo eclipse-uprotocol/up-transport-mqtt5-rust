@@ -79,8 +79,8 @@ The libraries need to be added to the `[dependencies]` section of the `Cargo.tom
 
 ```toml
 [dependencies]
-up-rust = { version = "0.4" }
-up-transport-mqtt5 = { version = "0.2" }
+up-rust = { version = "0.5" }
+up-transport-mqtt5 = { version = "0.3" }
 ```
 
 Please refer to the [publisher_example](/examples/publisher_example.rs) and [subscriber_example](/examples/subscriber_example.rs) to see how to initialize and use the transport.
@@ -111,7 +111,7 @@ Covers:
 ### Maximum number of listeners
 `uman~max-listeners-configuration~1`
 
-The MQTT 5 transport provided by this crate can be configured with the maximum number of filter patterns that listeners can be registered for by means of the `MqttClientOptions` struct that is being passed into `Mqtt5Transport::new`.
+The MQTT 5 transport provided by this crate can be configured with the maximum number of filter patterns that listeners can be registered for by means of the `MqttTransportOptions` struct that is being passed into `Mqtt5Transport::new`.
 Please refer to the [API Documentation](https://docs.rs/up-transport-mqtt5/) for details.
 
 Covers:

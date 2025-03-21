@@ -17,7 +17,7 @@ use backon::{ExponentialBuilder, Retryable};
 use clap::{command, Parser};
 use log::{error, info};
 use up_rust::{UMessageBuilder, UPayloadFormat, UStatus, UTransport, UUri};
-use up_transport_mqtt5::{Mqtt5Transport, MqttClientOptions, TransportMode};
+use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions};
 
 /// Publishes messages to a given topic using the MQTT 5 transport.
 #[derive(Parser)]
@@ -28,7 +28,7 @@ struct Command {
     topic: UUri,
 
     #[command(flatten)]
-    mqtt_client_options: MqttClientOptions,
+    transport_options: Mqtt5TransportOptions,
 }
 
 #[tokio::main]
@@ -38,12 +38,7 @@ async fn main() -> Result<(), UStatus> {
     let command = Command::parse();
     let authority = command.topic.authority_name.clone();
 
-    let client = Mqtt5Transport::new(
-        TransportMode::InVehicle,
-        command.mqtt_client_options,
-        authority,
-    )
-    .await?;
+    let client = Mqtt5Transport::new(command.transport_options, authority).await?;
 
     (|| {
         info!("Connecting to broker...");
