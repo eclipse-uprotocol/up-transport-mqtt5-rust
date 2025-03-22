@@ -59,7 +59,7 @@ pub async fn start_mosquitto() -> (ContainerAsync<GenericImage>, u16) {
     let host_port = container
         .get_host_port_ipv4(MOSQUITTO_CONTAINER_PORT)
         .await
-        .unwrap_or_else(|_| panic!("Port {MOSQUITTO_CONTAINER_PORT} should have been exposed"));
+        .expect("Port not exposed");
 
     (container, host_port)
 }
