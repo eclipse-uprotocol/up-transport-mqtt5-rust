@@ -57,7 +57,7 @@ protobuf = { version = "3.7.2" }
 tokio = { version = "1.44", default-features = false, features = [
     "rt",
     "rt-multi-thread",
-    "sync"
+    "sync",
 ] }
 up-rust = { version = "0.5.0", default-features = false }
 
@@ -69,11 +69,13 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
     "rt",
     "rt-multi-thread",
-    "sync"
+    "sync",
 ] }
 up-rust = { version = "0.5.0", default-features = false, features = [
     "test-util",
 ] }
+testcontainers = { version = "0.23" }
+
 
 [[example]]
 name = "publisher_example"
