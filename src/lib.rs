@@ -15,6 +15,8 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use bytes::Bytes;
+#[cfg(feature = "cli")]
+use clap::{Args, ValueEnum};
 use futures::stream::StreamExt;
 use listener_registry::{RegisteredListeners, SubscriptionIdentifier};
 use log::debug;
@@ -31,6 +33,62 @@ mod transport;
 
 const MQTT_TOPIC_ANY_SEGMENT_WILDCARD: &str = "+";
 
+#[cfg(feature = "cli")]
+const PARAM_MAX_FILTERS: &str = "max-filters";
+#[cfg(feature = "cli")]
+const PARAM_MAX_LISTENERS_PER_FILTER: &str = "max-listeners-per-filter";
+#[cfg(feature = "cli")]
+const PARAM_MODE: &str = "mode";
+
+const DEFAULT_MAX_FILTERS: u16 = 50;
+const DEFAULT_MAX_LISTENERS_PER_FILTER: u16 = 10;
+
+#[cfg_attr(feature = "cli", derive(Args))]
+/// Configuration options for the MQTT 5 transport.
+pub struct Mqtt5TransportOptions {
+    /// The maximum number of distinct filter criteria that listeners can be registered for.
+    // [impl->req~utransport-registerlistener-max-listeners~1]
+    #[cfg_attr(feature = "cli", arg(long = PARAM_MAX_FILTERS, value_name = "NUMBER", env = "MQTT_TRANSPORT_MAX_FILTERS", default_value_t = DEFAULT_MAX_FILTERS))]
+    pub max_filters: u16,
+
+    /// The maximum number of distinct listeners per filter criteria that the transport supports.
+    // [impl->req~utransport-registerlistener-max-listeners~1]
+    #[cfg_attr(feature = "cli", arg(long = PARAM_MAX_LISTENERS_PER_FILTER, value_name = "NUMBER", env = "MQTT_TRANSPORT_MAX_LISTENERS_PER_FILTER", default_value_t = DEFAULT_MAX_LISTENERS_PER_FILTER))]
+    pub max_listeners_per_filter: u16,
+
+    /// The mode that the transport should operate in.
+    #[cfg_attr(feature = "cli", arg(value_enum, long = PARAM_MODE, value_name = "MODE", env = "MQTT_TRANSPORT_MODE", default_value_t = TransportMode::InVehicle))]
+    pub mode: TransportMode,
+
+    #[cfg_attr(feature = "cli", command(flatten))]
+    pub mqtt_client_options: MqttClientOptions,
+}
+
+impl Default for Mqtt5TransportOptions {
+    /// Creates new default options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use up_transport_mqtt5::{Mqtt5TransportOptions, TransportMode};
+    ///
+    /// let options = Mqtt5TransportOptions::default();
+    /// assert_eq!(options.max_filters, 50);
+    /// assert_eq!(options.max_listeners_per_filter, 10);
+    /// assert_eq!(options.mode, TransportMode::InVehicle);
+    /// ```
+    fn default() -> Self {
+        Self {
+            max_filters: DEFAULT_MAX_FILTERS,
+            max_listeners_per_filter: DEFAULT_MAX_LISTENERS_PER_FILTER,
+            mode: TransportMode::InVehicle,
+            mqtt_client_options: MqttClientOptions::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "cli", derive(ValueEnum))]
 /// The transport's mode of operation.
 pub enum TransportMode {
     /// Indicates communication via an in-vehicle MQTT broker. This is used by uEntities within the same vehicle
@@ -161,20 +219,20 @@ impl Mqtt5Transport {
     ///
     /// # Arguments
     /// * `mode` - The transport's mode of operation.
-    /// * `options` - Configuration options for connecting to the MQTT broker.
+    /// * `options` - Configuration options for the transport.
     /// * `authority_name` - Authority name of the local uEntity.
     pub async fn new(
-        mode: TransportMode,
-        options: MqttClientOptions,
+        options: Mqtt5TransportOptions,
         authority_name: String,
     ) -> Result<Self, UStatus> {
         let registered_listeners = Arc::new(RwLock::new(RegisteredListeners::new(
-            options.max_subscriptions,
+            options.max_filters,
+            options.max_listeners_per_filter,
         )));
 
         // Create the MQTT client
         let mut client_operations = mqtt_client::PahoBasedMqttClientOperations::new_client(
-            options,
+            options.mqtt_client_options,
             registered_listeners.clone(),
         )?;
         let inbound_message_stream = client_operations.get_message_stream()?;
@@ -191,7 +249,7 @@ impl Mqtt5Transport {
             mqtt_client,
             registered_listeners,
             authority_name,
-            mode,
+            mode: options.mode,
             message_callback_handle,
         })
     }
@@ -457,7 +515,7 @@ mod tests {
 
         let up_client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
-            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
+            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -473,7 +531,7 @@ mod tests {
     async fn test_remove_listener_unsubscribes_topic_filter() {
         let topic_filter = "+/local_authority";
         let expected_topic_filter = topic_filter.to_string();
-        let mut registered_listeners = RegisteredListeners::new(10);
+        let mut registered_listeners = RegisteredListeners::default();
         let listener = Arc::new(MockUListener::new());
 
         assert!(registered_listeners
@@ -671,7 +729,7 @@ mod tests {
             .return_const(Ok(()));
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
-            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
+            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -688,7 +746,7 @@ mod tests {
             .return_const(());
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
-            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::new(10))),
+            registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
             authority_name: "VIN.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
