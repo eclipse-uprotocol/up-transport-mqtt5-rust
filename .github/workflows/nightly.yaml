@@ -47,8 +47,9 @@ jobs:
   coverage:
     uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-coverage.yaml@main
 
-  # disabled until up-spec repository has been tagged with the MQTT5 transport specification containing OFT spec items
-  # requirements-tracing:
+  # disabled until up-spec repository has been tagged with the MQTT5 transport specification containing
+  # OFT spec items
+  # current-spec-compliance:
   #   uses: eclipse-uprotocol/ci-cd/.github/workflows/requirements-tracing.yaml@main
   #   with:
-  #     oft-file-patterns: "${{ vars.UP_SPEC_OPEN_FAST_TRACE_FILE_PATTERNS }} ${{ vars.UP_RUST_OPEN_FAST_TRACE_FILE_PATTERNS }}"
+  #     env-file-suffix: "oft-current"
