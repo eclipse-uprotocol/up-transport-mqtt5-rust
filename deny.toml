@@ -18,7 +18,9 @@
 allow = [
     "Apache-2.0",
     "BSD-2-Clause",
+    "BSD-3-Clause",
     "EPL-2.0",
+    "ISC",
     "MIT",
     # Unicode-3.0 is not (yet) on the Eclipse Foundation's list of approved licenses
     # however, all of its predecessors are, thus we assume that 3.0 is also ok to use
@@ -33,4 +35,5 @@ wildcards = "deny"
 skip-tree = [
     { crate = "windows-sys", reason = "a foundational crate for many that bumps far too frequently to ever have a shared version" },
     { crate = "getrandom@0.2.15", reason = "an outdated version that is still used by some other crates we depend on" },
+    { crate = "testcontainers", reason = "this crate (and its deps) is only used for testing" },
 ]
