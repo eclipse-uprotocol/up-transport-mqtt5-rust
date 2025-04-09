@@ -19,6 +19,8 @@ use up_rust::{MockUListener, UMessageBuilder, UTransport, UUri};
 mod common;
 
 #[tokio::test]
+#[cfg(docker_available)]
+// This test requires Docker to run the Mosquitto MQTT broker.
 async fn test_publish_and_subscribe() {
     env_logger::init();
 

@@ -304,10 +304,10 @@ impl PahoBasedMqttClientOperations {
     ///
     /// # Arguments
     /// * `options` - Configuration for the MQTT client. These configuration options
-    ///               are getting stored with the client and used again when
-    ///               reestablishing a lost connection to the broker.
+    ///   are getting stored with the client and used again when reestablishing a lost
+    ///   connection to the broker.
     /// * `subscribed_topic_provider` - A component that knows about the topic filters for which
-    ///                                 listeners have been registered.
+    ///   listeners have been registered.
     ///
     /// # Returns
     ///

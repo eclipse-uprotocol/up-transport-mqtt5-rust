@@ -51,7 +51,7 @@ pub async fn create_up_transport_mqtt<S: Into<String>>(
 pub async fn start_mosquitto() -> (ContainerAsync<GenericImage>, u16) {
     const MOSQUITTO_CONTAINER_PORT: u16 = 1883;
 
-    let container = GenericImage::new("eclipse-mosquitto", "2.0.21")
+    let container = GenericImage::new("eclipse-mosquitto", "2.0")
         .with_exposed_port(ContainerPort::Tcp(MOSQUITTO_CONTAINER_PORT))
         // mosquitto seems to write to stderr
         .with_wait_for(WaitFor::message_on_stderr(" running"))

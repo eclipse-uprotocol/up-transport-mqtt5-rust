@@ -61,6 +61,9 @@ tokio = { version = "1.44", default-features = false, features = [
 ] }
 up-rust = { version = "0.5.0", default-features = false }
 
+[build-dependencies]
+testcontainers = { version = "0.23", features = ["blocking"] }
+
 [dev-dependencies]
 env_logger = { version = "0.11.7" }
 mockall = { version = "0.13" }
@@ -87,3 +90,10 @@ required-features = ["cli"]
 
 [package.metadata.docs.rs]
 all-features = true
+
+[lints.rust]
+# The build.rs script determines if Docker is available on the build
+# platform and adds the 'docker_available' cfg flag accordingly.
+# Tests using #[cfg(docker_available)] will then only be compiled (and run)
+# if Docker is actually available on the platform.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docker_available)'] }
