@@ -13,13 +13,12 @@
 
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use tokio::sync::Notify;
 use up_rust::{MockUListener, UMessageBuilder, UTransport, UUri};
 
 mod common;
 
 #[tokio::test]
-#[cfg(docker_available)]
+#[cfg_attr(not(docker_available), ignore)]
 // This test requires Docker to run the Mosquitto MQTT broker.
 async fn test_publish_and_subscribe() {
     env_logger::init();
@@ -29,7 +28,7 @@ async fn test_publish_and_subscribe() {
 
     let payload = "test_payload";
     let expected_payload = payload.to_owned();
-    let message_received = Arc::new(Notify::new());
+    let message_received = Arc::new(tokio::sync::Notify::new());
     let message_received_clone = message_received.clone();
     let mut listener = MockUListener::new();
     listener.expect_on_receive().once().return_once(move |msg| {
