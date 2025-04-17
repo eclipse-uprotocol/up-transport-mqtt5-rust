@@ -52,7 +52,7 @@ clap = { version = "4.5", default-features = false, features = [
 ], optional = true }
 futures = { version = "0.3" }
 log = { version = "0.4" }
-paho-mqtt = { version = "0.13.1", features = ["vendored-ssl"] }
+paho-mqtt = { version = "0.13.2", features = ["vendored-ssl"] }
 protobuf = { version = "3.7.2" }
 tokio = { version = "1.44", default-features = false, features = [
     "rt",
@@ -65,7 +65,7 @@ up-rust = { version = "0.5.0", default-features = false }
 testcontainers = { version = "0.23", features = ["blocking"] }
 
 [dev-dependencies]
-env_logger = { version = "0.11.7" }
+env_logger = { version = "0.11.8" }
 mockall = { version = "0.13" }
 test-case = { version = "3.3" }
 tokio = { version = "1.44.2", default-features = false, features = [
