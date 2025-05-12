@@ -116,8 +116,8 @@ impl TransportMode {
     ///
     /// # Arguments
     ///
-    /// * `fallback_authority` - The authority name to use if the given URI does not contain an authority.
     /// * `uri` - The URI to convert.
+    /// * `fallback_authority` - The authority name to use if the given URI does not contain an authority.
     // [impl->dsn~up-transport-mqtt5-e2e-topic-names~1]
     fn uri_to_e2e_mqtt_topic(uri: &UUri, fallback_authority: &str) -> String {
         let authority = Self::uri_to_authority_topic_segment(uri, fallback_authority);
@@ -218,7 +218,6 @@ impl Mqtt5Transport {
     /// attempts.
     ///
     /// # Arguments
-    /// * `mode` - The transport's mode of operation.
     /// * `options` - Configuration options for the transport.
     /// * `authority_name` - Authority name of the local uEntity.
     pub async fn new(
@@ -286,8 +285,7 @@ impl Mqtt5Transport {
     /// Creates a callback message handler that listens for incoming messages and notifies listeners asynchronously.
     ///
     /// # Arguments
-    /// * `subscription_topics` - Map of subscription identifiers to subscribed topic filters.
-    /// * `topic_listeners` - Map of topic filters to listeners.
+    /// * `registered_listeners` - Map of topic filters to listeners.
     /// * `message_stream` - Stream of incoming MQTT PUBLISH packets.
     /// * `mqtt_client_operations` - The client to use for interacting with the MQTT broker.
     fn create_cb_message_handler(
