@@ -1,6 +1,6 @@
 # Eclipse uProtocol MQTT 5 Transport Library for Rust
 
-This library provides a Rust based implementation of the [MQTT 5 uProtocol Transport v1.6.0-alpha.4](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.4/up-l1/mqtt_5.adoc).
+This library provides a Rust based implementation of the [MQTT 5 uProtocol Transport v1.6.0-alpha.5](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.5/up-l1/mqtt_5.adoc).
 
 ## Getting Started
 
@@ -89,7 +89,7 @@ The library contains the following modules:
 
 | Module    | uProtocol Specification                                                                                 | Purpose                                                                                                   |
 | --------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| transport | [uP-L1 Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/main/up-l1/README.adoc) | Implementation of MQTT5 uTransport client used for bidirectional point-2-point communication between uEs. |
+| transport | [uP-L1 Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/v1.6.0-alpha.5/up-l1/README.adoc) | Implementation of MQTT5 uTransport client used for bidirectional point-2-point communication between uEs. |
 
 ### Supported Message Priority Levels
 `uman~utransport-send-ignore-priority~1`
@@ -102,7 +102,7 @@ Covers:
 ### Supported Message Delivery Methods
 `uman~utransport-supported-message-delivery~1`
 
-The MQTT 5 transport provided by this crate supports the [push delivery method](https://github.com/eclipse-uprotocol/up-spec/blob/main/basics/delivery.adoc#2-event-delivery-methods) only.
+The MQTT 5 transport provided by this crate supports the [push delivery method](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.5/up-l1/README.adoc#5-message-delivery) only.
 The `Mqtt5Transport::receive` function therefore always returns `UCode::UNIMPLEMENTED`.
 
 Covers:

@@ -291,7 +291,6 @@ mod tests {
                         payload,
                         ..Default::default()
                     };
-                    // [utest->dsn~utransport-send-preserve-data~1]
                     assert_eq!(umessage, sent_message);
                     true
                 })

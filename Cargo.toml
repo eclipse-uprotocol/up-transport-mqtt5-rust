@@ -40,7 +40,7 @@ async-channel = { version = "1.6" }
 async-trait = { version = "0.1" }
 backon = { version = "1.4", default-features = false, features = ["tokio-sleep"] }
 bytes = { version = "1.10.1" }
-clap = { version = "4.5", default-features = false, features = [
+clap = { version = "4.5", optional = true, default-features = false, features = [
     "std",
     "derive",
     "env",
@@ -49,7 +49,7 @@ clap = { version = "4.5", default-features = false, features = [
     "usage",
     "error-context",
     "suggestions",
-], optional = true }
+]}
 futures = { version = "0.3" }
 log = { version = "0.4" }
 paho-mqtt = { version = "0.13.2", features = ["vendored-ssl"] }
@@ -59,7 +59,7 @@ tokio = { version = "1.44", default-features = false, features = [
     "rt-multi-thread",
     "sync",
 ] }
-up-rust = { version = "0.5.0", default-features = false }
+up-rust = { version = "0.6.0", default-features = false }
 
 [build-dependencies]
 testcontainers = { version = "0.23", features = ["blocking"] }
@@ -74,7 +74,7 @@ tokio = { version = "1.44.2", default-features = false, features = [
     "rt-multi-thread",
     "sync",
 ] }
-up-rust = { version = "0.5.0", default-features = false, features = [
+up-rust = { version = "0.6.0", default-features = false, features = [
     "test-util",
 ] }
 testcontainers = { version = "0.23" }
@@ -90,6 +90,11 @@ required-features = ["cli"]
 
 [package.metadata.docs.rs]
 all-features = true
+
+[package.metadata.cargo-all-features]
+# optional dependencies are activated by means of features only
+skip_optional_dependencies = true
+max_combination_size = 3
 
 [lints.rust]
 # The build.rs script determines if Docker is available on the build

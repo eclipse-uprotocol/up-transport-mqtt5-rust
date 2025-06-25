@@ -80,7 +80,6 @@ fn uuid_from_bytes<B: Into<Bytes>>(bytes: B) -> Result<UUID, UStatus> {
 /// Returns an error if the given meta data are invalid or cannot
 /// be mapped to MQTT properties.
 // [impl->dsn~up-transport-mqtt5-attributes-mapping~1]
-// [impl->dsn~utransport-send-preserve-data~1]
 pub(crate) fn create_mqtt_properties_from_uattributes(
     attributes: &UAttributes,
 ) -> Result<paho_mqtt::Properties, UStatus> {
@@ -253,7 +252,6 @@ pub(crate) fn create_mqtt_properties_from_uattributes(
 /// # Arguments
 /// * `props` - MQTT properties to get meta data from.
 // [impl->dsn~up-transport-mqtt5-attributes-mapping~1]
-// [impl->dsn~utransport-send-preserve-data~1]
 pub(crate) fn create_uattributes_from_mqtt_properties(
     props: &paho_mqtt::Properties,
 ) -> Result<UAttributes, UStatus> {

@@ -325,6 +325,8 @@ impl Mqtt5Transport {
                     .filter_map(|property| property.get_u16())
                     .collect();
 
+                // [impl->dsn~utransport-registerlistener-start-invoking-listeners~1]
+                // [impl->dsn~utransport-unregisterlistener-stop-invoking-listeners~1]
                 let listeners_to_invoke = {
                     let registered_listeners_read = registered_listeners.read().await;
                     if subscription_ids.is_empty() {
@@ -412,6 +414,7 @@ impl Mqtt5Transport {
     /// # Arguments
     /// * `topic_filter` - The topic filter to add the listener for.
     /// * `listener` - The callback to invoke for each incoming message that matches the filter.
+    // [impl->dsn~utransport-registerlistener-start-invoking-listeners~1]
     async fn add_listener(
         &self,
         topic_filter: &str,
@@ -446,6 +449,7 @@ impl Mqtt5Transport {
     /// # Arguments
     /// * `topic_filter` - The topic filter to remove the listener for.
     /// * `listener` - Listener to remove from the topic subscription list.
+    // [impl->dsn~utransport-unregisterlistener-stop-invoking-listeners~1]
     async fn remove_listener(
         &self,
         topic_filter: &str,
