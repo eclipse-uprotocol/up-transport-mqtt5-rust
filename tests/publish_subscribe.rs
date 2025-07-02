@@ -25,14 +25,20 @@ async fn test_publish_and_subscribe() {
 
     // fixture
     let (_mosquitto, broker_port) = common::start_mosquitto().await;
-
-    let payload = "test_payload";
-    let expected_payload = payload.to_owned();
     let message_received = Arc::new(tokio::sync::Notify::new());
+
+    let source = UUri::from_str("//Publisher/A8000/2/8A50").expect("Failed to create source URI");
+    let message_to_send = UMessageBuilder::publish(source)
+        .build_with_payload(
+            "test_payload",
+            up_rust::UPayloadFormat::UPAYLOAD_FORMAT_TEXT,
+        )
+        .expect("Failed to create message");
+    let expected_message = message_to_send.clone();
     let message_received_clone = message_received.clone();
     let mut listener = MockUListener::new();
     listener.expect_on_receive().once().return_once(move |msg| {
-        assert_eq!(msg.payload, Some(expected_payload.into()));
+        assert_eq!(msg, expected_message);
         message_received_clone.notify_one();
     });
 
@@ -48,7 +54,7 @@ async fn test_publish_and_subscribe() {
     subscriber
         .register_listener(&source_filter, None, Arc::new(listener))
         .await
-        .unwrap();
+        .expect("failed to register listener");
 
     let publisher = common::create_up_transport_mqtt("Publisher", broker_port)
         .await
@@ -58,10 +64,6 @@ async fn test_publish_and_subscribe() {
         .await
         .expect("failed to connect publisher to broker");
 
-    let source = UUri::from_str("//Publisher/A8000/2/8A50").unwrap();
-    let message_to_send = UMessageBuilder::publish(source)
-        .build_with_payload(payload, up_rust::UPayloadFormat::UPAYLOAD_FORMAT_TEXT)
-        .unwrap();
     publisher
         .send(message_to_send)
         .await

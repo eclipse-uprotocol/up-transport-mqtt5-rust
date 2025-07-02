@@ -11,6 +11,24 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+/*!
+This crate provides an implementation of the MQTT 5 uProtocol Transport.
+
+The transport requires an MQTT 5 broker to connect to and uses MQTT 5 `PUBLISH`
+packets to transfer uProtocol messages between uEntities.
+
+It supports both _in-vehicle_ and _off-vehicle_ communication modes, which
+are determined by the [TransportMode] enum set in the [Mqtt5TransportOptions]
+passed into the [Mqtt5Transport::new] function.
+
+The transport is designed to run in the context of a [tokio `Runtime`] which
+needs to be configured outside of the transport according to the
+processing requirements of the use case at hand. The transport does
+not make any implicit assumptions about the number of threads available
+and does not spawn any threads itself.
+
+[tokio `Runtime`]: https://docs.rs/tokio/latest/tokio/runtime/index.html
+*/
 use std::sync::Arc;
 
 use async_channel::Receiver;
@@ -197,6 +215,20 @@ impl TransportMode {
 }
 
 /// An MQTT 5 based uProtocol transport implementation.
+///
+/// The transport spawns a dedicated tokio task that listens for incoming messages
+/// and dispatches them to the listeners that have been registered using
+/// `up_rust::UTransport::register_listener`.
+///
+/// <div class="warning">
+///
+/// The registered listeners are being invoked sequentially on the **same thread**
+/// that the message handling task runs on. Implementers of listeners are therefore
+/// **strongly advised** to move non-trivial processing logic to **another/dedicated
+/// thread**, if necessary. Please refer to the `subscriber_example` in the
+/// examples directory for how this could be done.
+///
+/// </div>
 pub struct Mqtt5Transport {
     /// Client instance for connecting to mqtt broker.
     mqtt_client: Arc<dyn MqttClientOperations>,
@@ -273,6 +305,8 @@ impl Mqtt5Transport {
     }
 
     /// Stops processing of incoming messages.
+    ///
+    /// Also disconnects from the MQTT broker and clears the registered listeners.
     pub async fn shutdown(&self) {
         if let Some(cb_message_handle) = self.message_callback_handle.as_ref() {
             cb_message_handle.abort();
@@ -338,10 +372,13 @@ impl Mqtt5Transport {
                 };
 
                 for listener in listeners_to_invoke {
-                    let msg = umessage.clone();
-                    tokio::spawn(async move {
-                        listener.on_receive(msg).await;
-                    });
+                    // Note that we are invoking the listener on the current thread!
+                    // It is the responsibility of the listener to spawn a new task
+                    // if processing the message is non-trivial.
+                    // This is a deliberate design choice to let implementers of
+                    // `UListener` decide how to handle incoming messages and use
+                    // a custom tokio runtime configuration.
+                    listener.on_receive(umessage.clone()).await;
                 }
             }
         })

@@ -79,7 +79,7 @@ The libraries need to be added to the `[dependencies]` section of the `Cargo.tom
 
 ```toml
 [dependencies]
-up-rust = { version = "0.5" }
+up-rust = { version = "0.6" }
 up-transport-mqtt5 = { version = "0.3" }
 ```
 
@@ -131,10 +131,13 @@ Covers:
 ### Message Delivery
 `dsn~utransport-supported-message-delivery~1`
 
-All messages are being received by means of subscribing to relevant topics on the MQTT broker and delivering the messages to listeners that have been registered via `Mqtt5Transport::register_listener`.
+All messages are being received by means of subscribing to relevant topics on the MQTT broker and delivering the messages to listeners that have been registered via `up_rust::UTransport::register_listener`.
+The transport spawns a dedicated [tokio task](https://tokio.rs/tokio/tutorial/spawning#tasks) that listens for incoming messages and dispatches them to the registered listeners on the same thread that the message handling task runs on.
 
 Rationale:
 The MQTT 5 standard does not provide means to poll the broker for messages but only supports the push model by means of clients subscribing to topic filters.
+
+The transport requires a tokio runtime to execute but does not make any implicit assumption regarding the availability and size of thread pools. This provides for flexibility regarding the environment that the transport can be deployed to but also requires application developers to take care when implementing message listeners, making sure to not block the transport's incoming message handler when processing a dispatched message.
 
 Covers:
 - `req~utransport-delivery-methods~1`

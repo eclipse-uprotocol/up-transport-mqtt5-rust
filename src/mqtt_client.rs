@@ -63,7 +63,7 @@ const DEFAULT_SESSION_EXPIRY_INTERVAL: u32 = 0;
 static SUBSCRIPTION_RECREATION_IN_PROGRESS_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 #[cfg_attr(feature = "cli", derive(Args))]
-/// Configuration options for the MQTT client.
+/// Configuration options for the MQTT client to use for connecting to the broker.
 pub struct MqttClientOptions {
     /// The client identifier to use in the MQTT CONNECT Packet.
     #[cfg_attr(feature = "cli", arg(long = PARAM_MQTT_CLIENT_ID, value_name = "ID", env = "MQTT_CLIENT_ID"))]
@@ -167,6 +167,7 @@ impl TryFrom<&MqttClientOptions> for paho_mqtt::SslOptions {
     }
 }
 
+/// Configuration options for the MQTT client to use when connecting to a broker using TLS/SSL.
 #[cfg_attr(feature = "cli", derive(Args))]
 #[derive(Clone)]
 pub struct SslOptions {

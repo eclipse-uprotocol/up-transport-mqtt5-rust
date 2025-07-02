@@ -29,9 +29,20 @@ struct LoggingListener {}
 #[async_trait]
 impl UListener for LoggingListener {
     async fn on_receive(&self, message: UMessage) {
-        let msg_payload = message.payload.unwrap();
-        let msg_str: &str = str::from_utf8(&msg_payload).unwrap();
-        info!("Received message: {msg_str}");
+        // Make sure to not block the incoming message handler by spawning a new task
+        // for processing the message.
+        // Note that this does not per se guarantee that the message will be processed
+        // on a different thread than the transport's incoming message handler but it
+        // does ensure that this function returns quickly, allowing the incoming message
+        // handler to proceed as soon as possible.
+        tokio::spawn(async move {
+            let msg_payload = message.payload.unwrap();
+            let msg_str: &str = str::from_utf8(&msg_payload).unwrap();
+            info!("Received message: {msg_str}");
+            // simulate some time consuming processing
+            thread::sleep(std::time::Duration::from_millis(500));
+            info!("Finished processing message");
+        });
     }
 }
 
@@ -47,7 +58,7 @@ struct Command {
     transport_options: Mqtt5TransportOptions,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), UStatus> {
     env_logger::init();
 

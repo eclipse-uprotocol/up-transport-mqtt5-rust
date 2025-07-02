@@ -391,8 +391,7 @@ mod tests {
         } else {
             assert!(
                 register_result.is_ok(),
-                "registration failed: {:?}",
-                register_result
+                "registration failed: {register_result:?}"
             );
             assert!(listeners_for_expected_topic.contains(&ComparableListener::new(listener)));
         }
