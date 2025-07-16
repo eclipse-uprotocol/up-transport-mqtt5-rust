@@ -62,10 +62,12 @@ impl UTransport for Mqtt5Transport {
     async fn send(&self, message: UMessage) -> Result<(), UStatus> {
         // validate message
         // [impl->dsn~utransport-send-error-invalid-parameter~1]
-        let attributes = message.attributes.as_ref().ok_or(UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
-            "uProtocol message has no attributes",
-        ))?;
+        let attributes = message.attributes.as_ref().ok_or_else(|| {
+            UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                "uProtocol message has no attributes",
+            )
+        })?;
 
         // Extract payload from umessage to send
         // [impl->dsn~up-transport-mqtt5-payload-mapping~1]

@@ -54,6 +54,7 @@ futures = { version = "0.3" }
 log = { version = "0.4" }
 paho-mqtt = { version = "0.13.2", features = ["vendored-ssl"] }
 protobuf = { version = "3.7.2" }
+slab = { version = "0.4.9" }
 tokio = { version = "1.44", default-features = false, features = [
     "rt",
     "rt-multi-thread",
@@ -102,3 +103,9 @@ max_combination_size = 3
 # Tests using #[cfg(docker_available)] will then only be compiled (and run)
 # if Docker is actually available on the platform.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docker_available)'] }
+
+[lints.clippy]
+ ignored_unit_patterns = "warn"
+ or_fun_call = "warn"
+ as_conversions = "warn"
+

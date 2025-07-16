@@ -22,7 +22,7 @@ use up_rust::{
 
 const CURRENT_UPROTOCOL_MAJOR_VERSION: u8 = 1;
 
-/// Constants defining the protobuf field numbers for UAttributes.
+/// Constants defining the protobuf field numbers for `UAttributes`.
 const KEY_UPROTOCOL_VERSION: &str = "uP";
 const KEY_MESSAGE_ID: &str = "1";
 const KEY_TYPE: &str = "2";
@@ -160,8 +160,8 @@ pub(crate) fn create_mqtt_properties_from_uattributes(
             KEY_SINK,
             &sink.to_uri(false),
             "Failed to add message sink to MQTT User Properties",
-        )?
-    };
+        )?;
+    }
 
     let prio = attributes.priority.enum_value().map_err(|v| {
         UStatus::fail_with_code(
@@ -175,7 +175,7 @@ pub(crate) fn create_mqtt_properties_from_uattributes(
             KEY_PRIORITY,
             &prio.to_priority_code(),
             "Failed to add message priority to MQTT User Properties",
-        )?
+        )?;
     }
 
     if let Some(permission_level) = &attributes.permission_level {
@@ -207,7 +207,7 @@ pub(crate) fn create_mqtt_properties_from_uattributes(
                     UCode::INTERNAL,
                     format!("Failed to create Correlation Data property: {e:?}"),
                 )
-            })?
+            })?;
     }
 
     if let Some(token) = &attributes.token {
@@ -256,7 +256,7 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
     props: &paho_mqtt::Properties,
 ) -> Result<UAttributes, UStatus> {
     let uprotocol_major_version = props.find_user_property(KEY_UPROTOCOL_VERSION)
-        .ok_or(UStatus::fail_with_code(UCode::INVALID_ARGUMENT, "MQTT message does not contain uProtocol version identifier"))
+        .ok_or_else(||UStatus::fail_with_code(UCode::INVALID_ARGUMENT, "MQTT message does not contain uProtocol version identifier"))
         .and_then(|s| s.parse::<u8>().map_err(|err| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, format!("Failed to map UserProperty {KEY_UPROTOCOL_VERSION} to uProtocol major version: {err}"))))?;
     if uprotocol_major_version != CURRENT_UPROTOCOL_MAJOR_VERSION {
         return Err(UStatus::fail_with_code(UCode::INVALID_ARGUMENT, format!("MQTT message contains unsupported uProtocol major version [expected: {CURRENT_UPROTOCOL_MAJOR_VERSION}, found: {uprotocol_major_version}")));
@@ -276,7 +276,7 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
             )
         })?;
         attributes.id = MessageField::from(Some(id));
-    };
+    }
 
     if let Some(message_type_str) = props.find_user_property(KEY_TYPE) {
         attributes.type_ = UMessageType::try_from_cloudevent_type(message_type_str)
@@ -298,7 +298,7 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
                 )
             })
             .map(MessageField::some)?;
-    };
+    }
 
     if let Some(sink_string) = props.find_user_property(KEY_SINK) {
         attributes.sink = UUri::from_str(&sink_string)
@@ -309,7 +309,7 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
                 )
             })
             .map(MessageField::some)?;
-    };
+    }
 
     if let Some(priority_string) = props.find_user_property(KEY_PRIORITY) {
         attributes.priority = UPriority::try_from_priority_code(priority_string)
@@ -355,7 +355,7 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
                 )
             })
             .map(Option::Some)?;
-    };
+    }
 
     if let Some(comm_status_string) = props.find_user_property(KEY_COMMSTATUS) {
         attributes.commstatus = comm_status_string
@@ -367,7 +367,7 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
                 )
             })
             .and_then(|v| {
-                UCode::from_i32(v).ok_or({
+                UCode::from_i32(v).ok_or_else(||{
                     UStatus::fail_with_code(
                         UCode::INVALID_ARGUMENT,
                         format!("Failed to map UserProperty {KEY_COMMSTATUS} to CommStatus: not a valid UCode [{v}]"),
@@ -381,7 +381,7 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
     if let Some(req_id) = props.get_binary(paho_mqtt::PropertyCode::CorrelationData) {
         let uuid = uuid_from_bytes(req_id)?;
         attributes.reqid = Some(uuid).into();
-    };
+    }
 
     if let Some(payload_format_string) = props.get_string(paho_mqtt::PropertyCode::ContentType) {
         attributes.payload_format = payload_format_string
@@ -390,7 +390,7 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
               UCode::INVALID_ARGUMENT,
               format!("Failed to map Content Type to Message Payload Format: {err}")))
             .and_then(|v| {
-                UPayloadFormat::from_i32(v).ok_or(UStatus::fail_with_code(
+                UPayloadFormat::from_i32(v).ok_or_else(||UStatus::fail_with_code(
                     UCode::INVALID_ARGUMENT,
                     format!("Failed to map Content Type to Message Payload Format: not a valid payload format code [{v}]"),
                 ))
