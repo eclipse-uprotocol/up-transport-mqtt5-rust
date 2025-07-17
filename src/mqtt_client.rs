@@ -60,8 +60,6 @@ const DEFAULT_CLEAN_START: bool = false;
 const DEFAULT_MAX_BUFFERED_MESSAGES: u16 = 0;
 const DEFAULT_SESSION_EXPIRY_INTERVAL: u32 = 0;
 
-static SUBSCRIPTION_RECREATION_IN_PROGRESS_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
-
 #[cfg_attr(feature = "cli", derive(Args))]
 /// Configuration options for the MQTT client to use for connecting to the broker.
 pub struct MqttClientOptions {
@@ -281,19 +279,17 @@ pub(crate) trait MqttClientOperations: Sync + Send {
     async fn unsubscribe(&self, topic: &str) -> Result<(), UStatus>;
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct ConnectionState {
     subscription_ids_supported: bool,
     session_present: bool,
-    subscriptions_established: bool,
 }
 
 impl ConnectionState {
     fn reset(&mut self) {
-        debug!("resetting connection state");
+        trace!("Resetting connection state");
         self.subscription_ids_supported = false;
         self.session_present = false;
-        self.subscriptions_established = false;
     }
 }
 
@@ -330,6 +326,7 @@ pub(crate) struct PahoBasedMqttClientOperations {
     inbound_messages: Option<Receiver<Option<paho_mqtt::Message>>>,
     subscribed_topic_provider: Arc<tokio::sync::RwLock<dyn SubscribedTopicProvider>>,
     client_options: MqttClientOptions,
+    reconnect_in_progress: Arc<AtomicBool>,
 }
 
 impl PahoBasedMqttClientOperations {
@@ -380,6 +377,7 @@ impl PahoBasedMqttClientOperations {
                     inbound_messages: Some(inbound_message_stream),
                     subscribed_topic_provider,
                     client_options: options,
+                    reconnect_in_progress: Arc::new(AtomicBool::new(false)),
                 }
             })
     }
@@ -410,21 +408,12 @@ impl PahoBasedMqttClientOperations {
         })
     }
 
-    fn is_subscriptions_established(&self) -> bool {
-        read_connection_state(self.inner_mqtt_client.user_data().unwrap(), |props| {
-            props.subscriptions_established
-        })
-    }
-
     /// Updates the MQTT client's [user data](`ConnectionState`) with the connection properties
     /// contained in the CONNACK packet returned by the MQTT broker.
     ///
     /// # Returns
-    /// `true` if the MQTT5 broker has used session state for the new connection.
-    fn handle_connect_response(
-        user_data: &paho_mqtt::UserData,
-        token: paho_mqtt::ServerResponse,
-    ) -> bool {
+    /// `true` if the broker has used session state for the connection.
+    fn process_connack(user_data: &paho_mqtt::UserData, token: paho_mqtt::ServerResponse) -> bool {
         update_connection_state(user_data, |state| {
             state.reset();
             state.subscription_ids_supported = token
@@ -432,20 +421,10 @@ impl PahoBasedMqttClientOperations {
                 .get(paho_mqtt::PropertyCode::SubscriptionIdentifiersAvailable)
                 .and_then(|p| p.get_byte())
                 .is_none_or(|v| v == 1);
-            debug!(
-                "subscription IDs supported: {}",
-                state.subscription_ids_supported
-            );
             if let Some(connect_response) = token.connect_response() {
                 state.session_present = connect_response.session_present;
-                // the MQTT5 broker will automatically reestablish the subscriptions
-                // if session state is present
-                state.subscriptions_established = state.session_present;
-                debug!(
-                    "session present: {}, subscriptions established: {}",
-                    state.session_present, state.subscriptions_established
-                );
             }
+            debug!("Updated {state:?}");
             state.session_present
         })
     }
@@ -508,7 +487,7 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
             .await
             .map(|response| {
                 if let Some(user_data) = self.inner_mqtt_client.user_data() {
-                    Self::handle_connect_response(user_data, response);
+                    Self::process_connack(user_data, response);
                 }
             })
             .map_err(|e| {
@@ -520,7 +499,10 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
     }
 
     fn is_connected(&self) -> bool {
-        self.inner_mqtt_client.is_connected() && self.is_subscriptions_established()
+        self.inner_mqtt_client.is_connected()
+            && !self
+                .reconnect_in_progress
+                .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     // [impl->req~up-transport-mqtt5-reconnection~1]
@@ -529,88 +511,84 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
             debug!("Skipping reconnection attempt, connection has already been reestablished...");
             return;
         }
+        if self
+            .reconnect_in_progress
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::Acquire,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            // this means that a task for reestablishing the connection to
+            // the broker has already been spawned
+            return;
+        }
 
         let mqtt_client = self.inner_mqtt_client.clone();
         let topic_provider = self.subscribed_topic_provider.clone();
+        let reconnect_in_progress = self.reconnect_in_progress.clone();
 
-        let backoff_builder = backon::ExponentialBuilder::new()
-            .with_factor(2.0)
-            .with_jitter()
-            .with_min_delay(Duration::from_millis(500))
-            .with_max_delay(Duration::from_secs(10))
-            .without_max_times();
-        match (|| {
-            debug!("Attempting to reestablish connecting to broker...");
-            mqtt_client.reconnect()
-        })
-        .retry(&backoff_builder)
-        .when(|err| {
-            debug!("Failed to reestablish connection to MQTT broker: {err}");
-            // we always retry to reestablish the connection
-            true
-        })
-        .await
-        {
-            Err(_err) => {
-                // we cannot reach this arm because we do not limit the number of attempts to connnect
-            }
-            Ok(response) => {
-                debug!("Successfully reestablished connection to MQTT broker");
-                // this will always succeed because we set the user data during construction of the AsyncClient
-                let user_data = mqtt_client.user_data().unwrap();
-                if Self::handle_connect_response(user_data, response) {
-                    // the MQTT broker has used session state for the new connection
-                    // and will automatically reestablish the subscriptions
-                    debug!("Subscriptions have been reestablished by the MQTT broker from session state");
-                } else {
-                    // we only need to manually reestablish the subscriptions if
-                    // the server has not used any session state for the new connection
-                    let subscribed_topics = {
-                        let topic_provider_read = topic_provider.read().await;
-                        topic_provider_read.get_subscribed_topics()
-                    };
-                    // We try to recreate the subscribtions in the background with an infinite retry.
-                    tokio::spawn(async move {
-                        // Check if there is already a background job re-creating the subscribtions.
-                        if SUBSCRIPTION_RECREATION_IN_PROGRESS_IN_PROGRESS
-                            .load(std::sync::atomic::Ordering::Acquire)
-                        {
-                            return;
-                        }
-                        let backoff_builder = backon::ExponentialBuilder::new()
-                            .with_factor(2.0)
-                            .with_jitter()
-                            .with_min_delay(Duration::from_millis(500))
-                            .with_max_delay(Duration::from_secs(10))
-                            .without_max_times();
+        tokio::spawn(async move {
+            let backoff_builder = backon::ExponentialBuilder::new()
+                .with_factor(2.0)
+                .with_jitter()
+                .with_min_delay(Duration::from_millis(500))
+                .with_max_delay(Duration::from_secs(10))
+                .without_max_times();
+            let Ok(response) = (|| mqtt_client.reconnect())
+                .retry(&backoff_builder)
+                .when(|err| {
+                    debug!("Failed to reestablish connection to MQTT broker: {err}");
+                    // we always retry
+                    true
+                })
+                .await
+            else {
+                // this will never happen because we do not limit the number of attempts to connnect
+                return;
+            };
 
-                        if (|| {
-                            Self::recreate_subscriptions(
-                                mqtt_client.clone(),
-                                subscribed_topics.clone(),
-                            )
-                        })
-                        .retry(&backoff_builder)
-                        .when(|err| {
-                            debug!("Failed to recreate previously subscribed handlers: {err}");
-                            // we always retry to reestablish the subscriptions
-                            true
-                        })
-                        .await
-                        .is_ok()
-                        {
-                            // mark subscriptions as established
-                            update_connection_state(mqtt_client.user_data().unwrap(), |state| {
-                                state.subscriptions_established = true;
-                            });
-                            debug!("Successfully recreated all subscriptions");
-                        }
-                        SUBSCRIPTION_RECREATION_IN_PROGRESS_IN_PROGRESS
-                            .store(false, std::sync::atomic::Ordering::Release);
-                    });
+            debug!("Successfully reestablished connection to MQTT broker");
+            // this will always succeed because we set the user data during construction of the AsyncClient
+            let user_data = mqtt_client
+                .user_data()
+                .expect("failed to retrieve UserData from MqttClient");
+            let subscribed_topics = {
+                let topic_provider_read = topic_provider.read().await;
+                topic_provider_read.get_subscribed_topics()
+            };
+            let subscribed_topics_present = !subscribed_topics.is_empty();
+
+            if Self::process_connack(user_data, response) {
+                // the MQTT broker has used session state for the new connection
+                // and will automatically reestablish the subscriptions (if needed)
+                if subscribed_topics_present {
+                    debug!("Existing subscriptions have been reestablished by the MQTT broker from session state");
+                }
+            } else if subscribed_topics_present {
+                // we only need to manually reestablish the subscriptions if
+                // the server has not used any session state for the new connection
+                if (|| Self::recreate_subscriptions(mqtt_client.clone(), subscribed_topics.clone()))
+                    .retry(&backoff_builder)
+                    .when(|err| {
+                        debug!("Failed to recreate previously established subscriptions: {err}");
+                        // we always retry
+                        true
+                    })
+                    .await
+                    .is_ok()
+                {
+                    debug!(
+                        "Successfully recreated {} subscription(s)",
+                        subscribed_topics.len()
+                    );
                 }
             }
-        }
+            // mark reconnection attempt as completed
+            reconnect_in_progress.store(false, std::sync::atomic::Ordering::Release);
+        });
     }
 
     fn disconnect(&self) {
@@ -618,12 +596,10 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
     }
 
     async fn publish(&self, mqtt_message: paho_mqtt::Message) -> Result<(), UStatus> {
-        if SUBSCRIPTION_RECREATION_IN_PROGRESS_IN_PROGRESS
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        if !self.is_connected() {
             return Err(UStatus::fail_with_code(
                 UCode::UNAVAILABLE,
-                "Failed to publish since there is a subscription recreation running",
+                "Client has not established connection with broker yet",
             ));
         }
 
@@ -634,12 +610,10 @@ impl MqttClientOperations for PahoBasedMqttClientOperations {
     }
 
     async fn subscribe(&self, topic: &str, id: u16) -> Result<(), UStatus> {
-        if SUBSCRIPTION_RECREATION_IN_PROGRESS_IN_PROGRESS
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        if !self.is_connected() {
             return Err(UStatus::fail_with_code(
                 UCode::UNAVAILABLE,
-                "Failed to subscribe since there is a subscription recreation running",
+                "Client has not established connection with broker yet",
             ));
         }
         let subscription_properties = if self.is_subscription_ids_supported() {
