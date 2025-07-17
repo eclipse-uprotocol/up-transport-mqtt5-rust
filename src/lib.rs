@@ -38,7 +38,7 @@ use bytes::Bytes;
 use clap::{Args, ValueEnum};
 use futures::stream::StreamExt;
 use listener_registry::{RegisteredListeners, SubscriptionIdentifier};
-use log::debug;
+use log::{debug, trace};
 use mqtt_client::MqttClientOperations;
 pub use mqtt_client::{MqttClientOptions, SslOptions};
 use paho_mqtt::{self as mqtt, Message, QOS_1};
@@ -258,9 +258,9 @@ impl Mqtt5Transport {
     /// # Errors
     /// Will return an `Err` if the creation of the Paho client fails or if the incoming message
     /// stream is already taken.
-    pub async fn new(
+    pub async fn new<S: Into<String>>(
         options: Mqtt5TransportOptions,
-        authority_name: String,
+        authority_name: S,
     ) -> Result<Self, UStatus> {
         let registered_listeners = Arc::new(RwLock::new(RegisteredListeners::new(
             options.max_filters,
@@ -285,7 +285,7 @@ impl Mqtt5Transport {
         Ok(Self {
             mqtt_client,
             registered_listeners,
-            authority_name,
+            authority_name: authority_name.into(),
             mode: options.mode,
             message_callback_handle,
         })
@@ -341,7 +341,13 @@ impl Mqtt5Transport {
                     mqtt_client_operations.reconnect().await;
                     continue;
                 };
-
+                trace!(
+                    "Received MQTT message [topic: {}, content-type: {}]",
+                    msg.topic(),
+                    msg.properties()
+                        .get_string(paho_mqtt::PropertyCode::ContentType)
+                        .unwrap_or_else(|| "N/A".to_string())
+                );
                 // extract uProtocol message from MQTT PUBLISH packet
                 let umessage =
                     match mapping::create_uattributes_from_mqtt_properties(msg.properties()) {
