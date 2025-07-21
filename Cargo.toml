@@ -14,14 +14,7 @@
 [package]
 description = "The Eclipse uProtocol MQTT 5 Transport Library"
 edition = "2021"
-exclude = [
-    "tests/*",
-    "tools/*",
-    ".devcontainer/*",
-    ".vscode/*",
-    ".github/*",
-    ".gitignore",
-]
+exclude = ["tests/*", "tools/*", ".devcontainer/*", ".vscode/*", ".github/*", ".gitignore"]
 homepage = "https://github.com/eclipse-uprotocol/up-client-mqtt5-rust"
 keywords = ["uProtocol", "SDK", "MQTT", "MQTT5"]
 license = "Apache-2.0"
@@ -36,9 +29,9 @@ default = ["cli"]
 cli = ["clap"]
 
 [dependencies]
-async-channel = { version = "1.6" }
+async-channel = { version = "1.9" }
 async-trait = { version = "0.1" }
-backon = { version = "1.4", default-features = false, features = ["tokio-sleep"] }
+backon = { version = "1.5", default-features = false, features = ["tokio-sleep"] }
 bytes = { version = "1.10.1" }
 clap = { version = "4.5", optional = true, default-features = false, features = [
     "std",
@@ -49,37 +42,32 @@ clap = { version = "4.5", optional = true, default-features = false, features = 
     "usage",
     "error-context",
     "suggestions",
-]}
+] }
 futures = { version = "0.3" }
 log = { version = "0.4" }
-paho-mqtt = { version = "0.13.2", features = ["vendored-ssl"] }
+paho-mqtt = { version = "0.13.3", features = ["vendored-ssl"] }
 protobuf = { version = "3.7.2" }
 slab = { version = "0.4.9" }
-tokio = { version = "1.44", default-features = false, features = [
-    "rt",
-    "rt-multi-thread",
-    "sync",
-] }
+tokio = { version = "1.44", default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
 up-rust = { version = "0.6.0", default-features = false }
 
 [build-dependencies]
-testcontainers = { version = "0.23", features = ["blocking"] }
+testcontainers = { version = "0.24.0", features = ["blocking"] }
 
 [dev-dependencies]
 env_logger = { version = "0.11.8" }
-mockall = { version = "0.13" }
-test-case = { version = "3.3" }
+mockall = { version = "0.13.1" }
+serial_test = { version = "3.2.0" }
+tempfile = { version = "3.20.0" }
+test-case = { version = "3.3.1" }
+testcontainers = { version = "0.24.0" }
 tokio = { version = "1.44.2", default-features = false, features = [
     "macros",
     "rt",
     "rt-multi-thread",
     "sync",
 ] }
-up-rust = { version = "0.6.0", default-features = false, features = [
-    "test-util",
-] }
-testcontainers = { version = "0.23" }
-
+up-rust = { version = "0.6.0", default-features = false, features = ["test-util"] }
 
 [[example]]
 name = "publisher_example"
@@ -105,7 +93,6 @@ max_combination_size = 3
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docker_available)'] }
 
 [lints.clippy]
- ignored_unit_patterns = "warn"
- or_fun_call = "warn"
- as_conversions = "warn"
-
+ignored_unit_patterns = "warn"
+or_fun_call = "warn"
+as_conversions = "warn"
