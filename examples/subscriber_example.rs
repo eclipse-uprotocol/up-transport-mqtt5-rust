@@ -58,7 +58,7 @@ struct Command {
     transport_options: Mqtt5TransportOptions,
 }
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main]
 async fn main() -> Result<(), UStatus> {
     env_logger::init();
 
@@ -87,6 +87,8 @@ async fn main() -> Result<(), UStatus> {
     client
         .register_listener(&command.topic_filter, None, listener.clone())
         .await?;
-    thread::park();
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to install Ctrl-C handler");
     Ok(())
 }

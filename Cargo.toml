@@ -49,10 +49,10 @@ paho-mqtt = { version = "0.13.3", features = ["vendored-ssl"] }
 protobuf = { version = "3.7.2" }
 slab = { version = "0.4.9" }
 tokio = { version = "1.44", default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
-up-rust = { version = "0.6.0", default-features = false }
+up-rust = { version = "0.7.0", default-features = false }
 
 [build-dependencies]
-testcontainers = { version = "0.24.0", features = ["blocking"] }
+testcontainers = { version = "0.25.0", features = ["blocking"] }
 
 [dev-dependencies]
 env_logger = { version = "0.11.8" }
@@ -60,14 +60,14 @@ mockall = { version = "0.13.1" }
 serial_test = { version = "3.2.0" }
 tempfile = { version = "3.20.0" }
 test-case = { version = "3.3.1" }
-testcontainers = { version = "0.24.0" }
+testcontainers = { version = "0.25.0" }
 tokio = { version = "1.44.2", default-features = false, features = [
     "macros",
     "rt",
-    "rt-multi-thread",
+    "signal",
     "sync",
 ] }
-up-rust = { version = "0.6.0", default-features = false, features = ["test-util"] }
+up-rust = { version = "0.7.0", default-features = false, features = ["test-util"] }
 
 [[example]]
 name = "publisher_example"
