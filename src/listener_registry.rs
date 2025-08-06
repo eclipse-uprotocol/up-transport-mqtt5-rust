@@ -37,6 +37,8 @@ pub(crate) struct RegisteredListeners {
     subscriptions_by_topic_filter: TopicMatcher,
     // [impl->req~utransport-registerlistener-max-listeners~1]
     max_listeners_per_subscription: usize,
+    #[cfg(test)]
+    ignored_message_listener: Option<ComparableListener>,
 }
 
 impl Default for RegisteredListeners {
@@ -70,7 +72,19 @@ impl RegisteredListeners {
             subscriptions_by_id,
             subscriptions_by_topic_filter: TopicMatcher::new(),
             max_listeners_per_subscription: max_listeners_per_subscription.into(),
+            #[cfg(test)]
+            ignored_message_listener: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_ignored_message_listener(&mut self, listener: Arc<dyn up_rust::UListener>) {
+        self.ignored_message_listener = Some(ComparableListener::new(listener));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_ignored_message_listener(&self) -> Option<ComparableListener> {
+        self.ignored_message_listener.clone()
     }
 
     /// Resets this registry to its initial state.
@@ -322,7 +336,7 @@ mod tests {
         let topic = "remote_authority/local_authority";
         let listener = Arc::new(MockUListener::new());
         let expected_listener = ComparableListener::new(listener.clone());
-        let mut registered_listeners = RegisteredListeners::new(2, 2);
+        let mut registered_listeners = RegisteredListeners::default();
 
         assert!(registered_listeners
             .determine_listeners_for_topic(topic)
@@ -419,7 +433,7 @@ mod tests {
 
         let listener = Arc::new(MockUListener::new());
         let expected_listener = ComparableListener::new(listener.clone());
-        let mut registered_listeners = RegisteredListeners::new(2, 2);
+        let mut registered_listeners = RegisteredListeners::default();
 
         assert!(registered_listeners
             .determine_listeners_for_topic(topic_1)
@@ -500,7 +514,7 @@ mod tests {
     fn test_get_subscribed_topics() {
         let topic_filter = "+/local_authority";
         let listener = Arc::new(MockUListener::new());
-        let mut registered_listeners = RegisteredListeners::new(2, 2);
+        let mut registered_listeners = RegisteredListeners::default();
 
         assert!(registered_listeners.get_subscribed_topics().is_empty());
 
