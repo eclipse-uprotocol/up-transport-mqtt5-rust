@@ -47,7 +47,7 @@ futures = { version = "0.3" }
 log = { version = "0.4" }
 paho-mqtt = { version = "0.13.3", features = ["vendored-ssl"] }
 protobuf = { version = "3.7.2" }
-slab = { version = "0.4.9" }
+slab = { version = "0.4.11" }
 tokio = { version = "1.44", default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
 up-rust = { version = "0.7.0", default-features = false }
 
