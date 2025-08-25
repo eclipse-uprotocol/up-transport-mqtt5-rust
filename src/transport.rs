@@ -19,32 +19,6 @@ use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
 
 use crate::Mqtt5Transport;
 
-pub(crate) fn verify_filter_criteria(
-    source_filter: &UUri,
-    sink_filter: Option<&UUri>,
-) -> Result<(), UStatus> {
-    if let Some(sink_filter_uuri) = sink_filter {
-        if sink_filter_uuri.is_notification_destination()
-            && source_filter.is_notification_destination()
-        {
-            return Err(UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
-                "source and sink filters must not both have resource ID 0",
-            ));
-        }
-        if sink_filter_uuri.is_rpc_method()
-            && !source_filter.has_wildcard_resource_id()
-            && !source_filter.is_notification_destination()
-        {
-            return Err(UStatus::fail_with_code(UCode::INVALID_ARGUMENT, "source filter must either have the wildcard resource ID or resource ID 0, if sink filter matches RPC method resource ID"));
-        }
-    } else if !source_filter.has_wildcard_resource_id() && !source_filter.is_event() {
-        return Err(UStatus::fail_with_code(UCode::INVALID_ARGUMENT, "source filter must either have the wildcard resource ID or a resource ID from topic range, if sink filter is empty"));
-    }
-    // everything else might match valid messages
-    Ok(())
-}
-
 #[async_trait]
 impl UTransport for Mqtt5Transport {
     async fn receive(
@@ -85,7 +59,7 @@ impl UTransport for Mqtt5Transport {
         listener: Arc<dyn UListener>,
     ) -> Result<(), UStatus> {
         // [impl->dsn~utransport-registerlistener-error-invalid-parameter~1]
-        verify_filter_criteria(source_filter, sink_filter)?;
+        up_rust::verify_filter_criteria(source_filter, sink_filter)?;
         let topic = self
             .to_mqtt_topic_string(source_filter, sink_filter)
             .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
@@ -102,7 +76,7 @@ impl UTransport for Mqtt5Transport {
         listener: Arc<dyn UListener>,
     ) -> Result<(), UStatus> {
         // [impl->dsn~utransport-unregisterlistener-error-invalid-parameter~1]
-        verify_filter_criteria(source_filter, sink_filter)?;
+        up_rust::verify_filter_criteria(source_filter, sink_filter)?;
         let topic: String = self
             .to_mqtt_topic_string(source_filter, sink_filter)
             .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
