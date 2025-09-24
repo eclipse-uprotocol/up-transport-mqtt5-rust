@@ -34,10 +34,27 @@ jobs:
   coverage:
     uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-coverage.yaml@main
 
-  requirements-tracing:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/requirements-tracing.yaml@main
-    with:
-      env-file-suffix: "oft-current"
+  current-spec-compliance:
+    runs-on: ubuntu-latest
+    # we do not invoke the corresponding job from ci-cd repo
+    # because we do not want the job to fail if not all requirements
+    # are covered (yet)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - name: "Determine OpenFastTrace file patterns from .env file"
+        uses: xom9ikk/dotenv@v2.3.0
+        with:
+          mode: "oft-current"
+          load-mode: strict
+        # this will run OFT and upload the results
+      - name: Run OpenFastTrace
+        id: run-oft
+        uses: eclipse-uprotocol/ci-cd/.github/actions/run-oft@main
+        with:
+          file-patterns: "${{ env.OFT_FILE_PATTERNS }}"
+          tags: "${{ env.OFT_TAGS_}}"
 
   licenses:
     # This works off the license declarations in dependent packages/crates, so if these declarations are wrong, this report will contain erroneous information
@@ -55,7 +72,7 @@ jobs:
       - check
       - check-msrv
       - coverage
-      - requirements-tracing
+      - current-spec-compliance
       - licenses
     permissions: write-all
     steps:
