@@ -290,6 +290,11 @@ fn determine_listeners(
     }
 }
 
+fn is_valid_authority_name(authority: &str) -> bool {
+    // use validation logic of UUri for authority name validation
+    UUri::try_from_parts(authority, 0x0001, 0x01, 0x0000).is_ok()
+}
+
 /// An MQTT 5 based uProtocol transport implementation.
 ///
 /// The transport spawns a dedicated tokio task that listens for incoming messages
@@ -336,6 +341,13 @@ impl Mqtt5Transport {
         options: Mqtt5TransportOptions,
         authority_name: S,
     ) -> Result<Self, UStatus> {
+        let authority = authority_name.into();
+        if !is_valid_authority_name(&authority) {
+            return Err(UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                "Authority name contains invalid characters",
+            ));
+        }
         let registered_listeners = Arc::new(RwLock::new(RegisteredListeners::new(
             options.max_filters,
             options.max_listeners_per_filter,
@@ -351,7 +363,7 @@ impl Mqtt5Transport {
         let mut transport = Self {
             mqtt_client: Arc::new(client_operations),
             registered_listeners,
-            authority_name: authority_name.into(),
+            authority_name: authority,
             mode: options.mode,
             message_callback_handle: None,
         };
@@ -609,6 +621,24 @@ mod tests {
             .finalize()
     }
 
+    #[test_case("valid-authority" => true; "valid authority with hyphen")]
+    #[test_case("valid.authority" => true; "valid authority with dot")]
+    #[test_case("valid_authority" => true; "valid authority with underscore")]
+    #[test_case("valid~authority" => true; "valid authority with tilde")]
+    #[test_case("validauthority123" => true; "valid authority with digits")]
+    #[test_case("192.168.1.1" => true; "valid authority with IPv4 address")]
+    #[test_case("[2001:0db8:85a3:0000:0000:8a2e:0370:7334]" => true; "valid authority with IPv6 address")]
+    #[test_case("" => true; "empty authority")]
+    #[test_case("invalid authority" => false; "invalid authority with space")]
+    #[test_case("invalid@authority" => false; "invalid authority with at character")]
+    #[test_case("invalid/authority" => false; "invalid authority with slash character")]
+    #[test_case("a".repeat(129).as_str() => false; "invalid authority with excessive length")]
+    #[test_case("2001:0db8:85a3:0000:0000:8a2e:0370:7334" => false; "invalid IPv6 address missing brackets")]
+    #[test_case("[2001:0db8:85a3:0000:0000:8a2e:0370:7334:8888]" => false; "invalid IPv6 address")]
+    fn test_is_valid_authority_name(authority: &str) -> bool {
+        is_valid_authority_name(authority)
+    }
+
     #[tokio::test]
     async fn test_add_listener_subscribes_to_topic_filter() {
         let topic_filter = "+/local_authority";
@@ -639,8 +669,8 @@ mod tests {
     #[tokio::test]
     async fn test_register_listener_starts_invoking_listeners() {
         let source_filter =
-            UUri::from_str("up://VIN.vehicles/FFFF8000/2/8A50").expect("invalid source filter");
-        let source = UUri::from_str("//VIN.vehicles/A8000/2/8A50").expect("invalid source");
+            UUri::from_str("up://vin.vehicles/FFFF8000/2/8A50").expect("invalid source filter");
+        let source = UUri::from_str("//vin.vehicles/A8000/2/8A50").expect("invalid source");
 
         let mut client_operations = MockMqttClientOperations::new();
         client_operations.expect_subscribe().return_const(Ok(()));
@@ -757,12 +787,12 @@ mod tests {
     }
 
     #[test_case(
-        "up://VIN.vehicles/A8000/2/8A50",
-        "VIN.vehicles";
+        "up://vin.vehicles/A8000/2/8A50",
+        "vin.vehicles";
         "Valid UUri"
     )]
     #[test_case(
-        "A8000/2/8A50",
+        "/A8000/2/8A50",
         "local_authority";
         "Local UUri"
     )]
@@ -780,12 +810,12 @@ mod tests {
     }
 
     #[test_case(
-        "up://VIN.vehicles/A8000/2/8A50",
-        "VIN.vehicles/8000/A/2/8A50";
+        "up://vin.vehicles/A8000/2/8A50",
+        "vin.vehicles/8000/A/2/8A50";
         "Valid UUri"
     )]
     #[test_case(
-        "A8000/2/8A50",
+        "/A8000/2/8A50",
         "local_authority/8000/A/2/8A50";
         "Local UUri"
     )]
@@ -795,23 +825,23 @@ mod tests {
         "Wildcard authority"
     )]
     #[test_case(
-        "//VIN.vehicles/FFFF/2/8A50",
-        "VIN.vehicles/+/0/2/8A50";
+        "//vin.vehicles/FFFF/2/8A50",
+        "vin.vehicles/+/0/2/8A50";
         "Wildcard entity type id"
     )]
     #[test_case(
-        "//VIN.vehicles/FFFF8000/2/8A50",
-        "VIN.vehicles/8000/+/2/8A50";
+        "//vin.vehicles/FFFF8000/2/8A50",
+        "vin.vehicles/8000/+/2/8A50";
         "Wildcard entity instance id"
     )]
     #[test_case(
-        "//VIN.vehicles/A8000/FF/8A50",
-        "VIN.vehicles/8000/A/+/8A50";
+        "//vin.vehicles/A8000/FF/8A50",
+        "vin.vehicles/8000/A/+/8A50";
         "Wildcard entity version"
     )]
     #[test_case(
-        "//VIN.vehicles/A8000/2/FFFF",
-        "VIN.vehicles/8000/A/2/+";
+        "//vin.vehicles/A8000/2/FFFF",
+        "vin.vehicles/8000/A/2/+";
         "Wildcard resource id"
     )]
     // [utest->dsn~up-transport-mqtt5-e2e-topic-names~1]
@@ -823,17 +853,17 @@ mod tests {
     }
 
     #[test_case(
-        "//VIN.vehicles/A8000/2/8A50",
+        "//vin.vehicles/A8000/2/8A50",
         None,
         TransportMode::InVehicle,
-        "VIN.vehicles/8000/A/2/8A50";
+        "vin.vehicles/8000/A/2/8A50";
         "Publish to a specific topic"
     )]
     #[test_case(
-        "//VIN.vehicles/A8000/2/8A50",
-        Some("//VIN.vehicles/B8000/3/0"),
+        "//vin.vehicles/A8000/2/8A50",
+        Some("//vin.vehicles/B8000/3/0"),
         TransportMode::InVehicle,
-        "VIN.vehicles/8000/A/2/8A50/VIN.vehicles/8000/B/3/0";
+        "vin.vehicles/8000/A/2/8A50/vin.vehicles/8000/B/3/0";
         "Send a notification"
     )]
     #[test_case(
@@ -844,10 +874,10 @@ mod tests {
         "Send a local RPC request"
     )]
     #[test_case(
-        "//VIN.vehicles/B8000/3/1B50",
-        Some("//VIN.vehicles/A8000/2/0"),
+        "//vin.vehicles/B8000/3/1B50",
+        Some("//vin.vehicles/A8000/2/0"),
         TransportMode::InVehicle,
-        "VIN.vehicles/8000/B/3/1B50/VIN.vehicles/8000/A/2/0";
+        "vin.vehicles/8000/B/3/1B50/vin.vehicles/8000/A/2/0";
         "Send an RPC Response"
     )]
     #[test_case(
@@ -919,7 +949,7 @@ mod tests {
         let mqtt_transport = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
-            authority_name: "VIN.vehicles".to_string(),
+            authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
         };
@@ -936,7 +966,7 @@ mod tests {
         let mqtt_transport = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
-            authority_name: "VIN.vehicles".to_string(),
+            authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
         };
