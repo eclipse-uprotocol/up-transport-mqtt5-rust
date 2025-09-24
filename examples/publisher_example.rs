@@ -24,7 +24,7 @@ use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions};
 #[command(version, about, long_about = None)]
 struct Command {
     /// The uProtocol topic to publish messages to.
-    #[arg(value_name = "URI", env = "TOPIC", default_value = "up://Vehicle_B/A8000/2/8A50", value_parser = UUri::from_str)]
+    #[arg(value_name = "URI", env = "TOPIC", default_value = "up://vehicle_b/A8000/2/8A50", value_parser = UUri::from_str)]
     topic: UUri,
 
     #[command(flatten)]

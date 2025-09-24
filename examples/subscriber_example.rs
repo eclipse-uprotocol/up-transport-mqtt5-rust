@@ -51,7 +51,7 @@ impl UListener for LoggingListener {
 #[command(version, about, long_about = None)]
 struct Command {
     /// The uProtocol filter URI to consume messages for.
-    #[arg(value_name = "URI", env = "TOPIC_FILTER", default_value = "up://Vehicle_B/FFFFFFFF/FF/FFFF", value_parser = UUri::from_str)]
+    #[arg(value_name = "URI", env = "TOPIC_FILTER", default_value = "up://vehicle_b/FFFFFFFF/FF/FFFF", value_parser = UUri::from_str)]
     topic_filter: UUri,
 
     #[command(flatten)]
