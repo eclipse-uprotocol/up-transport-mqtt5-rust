@@ -117,6 +117,10 @@ Please refer to the [API Documentation](https://docs.rs/up-transport-mqtt5/) for
 Covers:
 - `req~utransport-registerlistener-max-listeners~1`
 
+### Known Limitations
+
+The crate currently does not use the proper UCode to indicate authorization problems when sending messages or registering listeners.
+
 ## Design
 
 ### Message Priority Mapping
