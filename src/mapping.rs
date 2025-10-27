@@ -13,7 +13,6 @@
 
 use std::str::FromStr;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
 use protobuf::{Enum, EnumOrUnknown, MessageField};
 use up_rust::{
     UAttributes, UAttributesValidators, UCode, UMessageType, UPayloadFormat, UPriority, UStatus,
@@ -45,28 +44,6 @@ fn add_user_property(
     properties
         .push_string_pair(paho_mqtt::PropertyCode::UserProperty, key, value)
         .map_err(|e| UStatus::fail_with_code(UCode::INTERNAL, format!("{error_message}: {e:?}")))
-}
-
-fn uuid_as_vec(uuid: &UUID) -> Vec<u8> {
-    let mut buf = BytesMut::with_capacity(16);
-    buf.put_u64(uuid.msb);
-    buf.put_u64(uuid.lsb);
-    buf.to_vec()
-}
-
-fn uuid_from_bytes<B: Into<Bytes>>(bytes: B) -> Result<UUID, UStatus> {
-    let mut buf: Bytes = bytes.into();
-    if buf.len() < 16 {
-        return Err(UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
-            "byte array must contain at least 16 bytes",
-        ));
-    }
-    Ok(UUID {
-        msb: buf.get_u64(),
-        lsb: buf.get_u64(),
-        ..Default::default()
-    })
 }
 
 /// Creates MQTT 5 header properties from uProtocol message meta data
@@ -198,10 +175,7 @@ pub(crate) fn create_mqtt_properties_from_uattributes(
 
     if let Some(req_id) = attributes.reqid.as_ref() {
         properties
-            .push_binary(
-                paho_mqtt::PropertyCode::CorrelationData,
-                uuid_as_vec(req_id),
-            )
+            .push_binary::<Vec<u8>>(paho_mqtt::PropertyCode::CorrelationData, req_id.into())
             .map_err(|e| {
                 UStatus::fail_with_code(
                     UCode::INTERNAL,
@@ -379,7 +353,8 @@ pub(crate) fn create_uattributes_from_mqtt_properties(
     }
 
     if let Some(req_id) = props.get_binary(paho_mqtt::PropertyCode::CorrelationData) {
-        let uuid = uuid_from_bytes(req_id)?;
+        let uuid = UUID::try_from(req_id)
+            .map_err(|e| UStatus::fail_with_code(UCode::INVALID_ARGUMENT, e.to_string()))?;
         attributes.reqid = Some(uuid).into();
     }
 
@@ -624,10 +599,7 @@ mod tests {
         }
         if let Some(reqid_val) = reqid {
             properties
-                .push_binary(
-                    paho_mqtt::PropertyCode::CorrelationData,
-                    uuid_as_vec(reqid_val),
-                )
+                .push_binary::<Vec<u8>>(paho_mqtt::PropertyCode::CorrelationData, reqid_val.into())
                 .inspect_err(|err| println!("{err}"))
                 .expect("Failed to set Correlation Data property");
         }
