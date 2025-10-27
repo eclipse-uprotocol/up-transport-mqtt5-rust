@@ -1,6 +1,6 @@
 # Eclipse uProtocol MQTT 5 Transport Library for Rust
 
-This library provides a Rust based implementation of the [MQTT 5 uProtocol Transport v1.6.0-alpha.6](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.6/up-l1/mqtt_5.adoc).
+This library provides a Rust based implementation of the [MQTT 5 uProtocol Transport v1.6.0-alpha.7](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.7/up-l1/mqtt_5.adoc).
 
 ## Getting Started
 
@@ -79,8 +79,8 @@ The libraries need to be added to the `[dependencies]` section of the `Cargo.tom
 
 ```toml
 [dependencies]
-up-rust = { version = "0.7" }
-up-transport-mqtt5 = { version = "0.3" }
+up-rust = { version = "0.8" }
+up-transport-mqtt5 = { version = "0.4" }
 ```
 
 Please refer to the [publisher_example](/examples/publisher_example.rs) and [subscriber_example](/examples/subscriber_example.rs) to see how to initialize and use the transport.
@@ -89,7 +89,7 @@ The library contains the following modules:
 
 | Module    | uProtocol Specification                                                                                 | Purpose                                                                                                   |
 | --------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| transport | [uP-L1 Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/v1.6.0-alpha.6/up-l1/README.adoc) | Implementation of MQTT5 uTransport client used for bidirectional point-2-point communication between uEs. |
+| transport | [uP-L1 Specifications](https://github.com/eclipse-uprotocol/uprotocol-spec/blob/v1.6.0-alpha.7/up-l1/README.adoc) | Implementation of MQTT5 uTransport client used for bidirectional point-2-point communication between uEs. |
 
 ### Supported Message Priority Levels
 `uman~utransport-send-ignore-priority~1`
@@ -102,7 +102,7 @@ Covers:
 ### Supported Message Delivery Methods
 `uman~utransport-supported-message-delivery~1`
 
-The MQTT 5 transport provided by this crate supports the [push delivery method](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.6/up-l1/README.adoc#5-message-delivery) only.
+The MQTT 5 transport provided by this crate supports the [push delivery method](https://github.com/eclipse-uprotocol/up-spec/blob/v1.6.0-alpha.7/up-l1/README.adoc#5-message-delivery) only.
 The `Mqtt5Transport::receive` function therefore always returns `UCode::UNIMPLEMENTED`.
 
 Covers:

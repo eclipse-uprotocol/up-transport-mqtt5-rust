@@ -13,3 +13,7 @@ target/
 
 .vscode/
 .idea/
+
+# temporary files created by the Dash license checker
+DASH_*
+DEPS*

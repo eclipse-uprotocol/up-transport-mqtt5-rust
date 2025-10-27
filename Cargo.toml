@@ -22,7 +22,7 @@ name = "up-transport-mqtt5"
 readme = "README.md"
 repository = "https://github.com/eclipse-uprotocol/up-client-mqtt5-rust"
 rust-version = "1.82"
-version = "0.3.0"
+version = "0.4.0-SNAPSHOT"
 
 [features]
 default = ["cli"]
@@ -48,8 +48,8 @@ log = { version = "0.4" }
 paho-mqtt = { version = "0.13.3", features = ["vendored-ssl"] }
 protobuf = { version = "3.7.2" }
 slab = { version = "0.4.11" }
-tokio = { version = "1.44", default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
-up-rust = { version = "0.7.0", default-features = false }
+tokio = { version = "1.45.1", default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
+up-rust = { version = "0.8.1", default-features = false }
 
 [build-dependencies]
 testcontainers = { version = "0.25.0", features = ["blocking"] }
@@ -61,13 +61,13 @@ serial_test = { version = "3.2.0" }
 tempfile = { version = "3.20.0" }
 test-case = { version = "3.3.1" }
 testcontainers = { version = "0.25.0" }
-tokio = { version = "1.44.2", default-features = false, features = [
+tokio = { version = "1.45.1", default-features = false, features = [
     "macros",
     "rt",
     "signal",
     "sync",
 ] }
-up-rust = { version = "0.7.0", default-features = false, features = ["test-util"] }
+up-rust = { version = "0.8.1", default-features = false, features = ["test-util"] }
 
 [[example]]
 name = "publisher_example"
