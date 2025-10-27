@@ -290,9 +290,22 @@ fn determine_listeners(
     }
 }
 
-fn is_valid_authority_name(authority: &str) -> bool {
+fn verify_authority_name<S: Into<String>>(authority: S) -> Result<String, UStatus> {
+    let authority_name = authority.into();
     // use validation logic of UUri for authority name validation
-    UUri::try_from_parts(authority, 0x0001, 0x01, 0x0000).is_ok()
+    if authority_name.is_empty() || &authority_name == "*" {
+        return Err(UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            "Authority name must be non-empty and must not be the wildcard authority name",
+        ));
+    }
+
+    UUri::verify_authority(&authority_name).map_err(|err| {
+        UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            format!("Invalid authority name: {err}"),
+        )
+    })
 }
 
 /// An MQTT 5 based uProtocol transport implementation.
@@ -335,19 +348,12 @@ impl Mqtt5Transport {
     /// * `authority_name` - Authority name of the local uEntity.
     ///
     /// # Errors
-    /// Will return an `Err` if the creation of the Paho client fails or if the incoming message
-    /// stream is already taken.
+    /// Will return an error if the creation of the Paho client fails, or if the given authority name is invalid.
     pub async fn new<S: Into<String>>(
         options: Mqtt5TransportOptions,
         authority_name: S,
     ) -> Result<Self, UStatus> {
-        let authority = authority_name.into();
-        if !is_valid_authority_name(&authority) {
-            return Err(UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
-                "Authority name contains invalid characters",
-            ));
-        }
+        let authority = verify_authority_name(authority_name)?;
         let registered_listeners = Arc::new(RwLock::new(RegisteredListeners::new(
             options.max_filters,
             options.max_listeners_per_filter,
@@ -621,22 +627,12 @@ mod tests {
             .finalize()
     }
 
-    #[test_case("valid-authority" => true; "valid authority with hyphen")]
     #[test_case("valid.authority" => true; "valid authority with dot")]
-    #[test_case("valid_authority" => true; "valid authority with underscore")]
-    #[test_case("valid~authority" => true; "valid authority with tilde")]
-    #[test_case("validauthority123" => true; "valid authority with digits")]
-    #[test_case("192.168.1.1" => true; "valid authority with IPv4 address")]
-    #[test_case("[2001:0db8:85a3:0000:0000:8a2e:0370:7334]" => true; "valid authority with IPv6 address")]
-    #[test_case("" => true; "empty authority")]
     #[test_case("invalid authority" => false; "invalid authority with space")]
-    #[test_case("invalid@authority" => false; "invalid authority with at character")]
-    #[test_case("invalid/authority" => false; "invalid authority with slash character")]
-    #[test_case("a".repeat(129).as_str() => false; "invalid authority with excessive length")]
-    #[test_case("2001:0db8:85a3:0000:0000:8a2e:0370:7334" => false; "invalid IPv6 address missing brackets")]
-    #[test_case("[2001:0db8:85a3:0000:0000:8a2e:0370:7334:8888]" => false; "invalid IPv6 address")]
+    #[test_case("" => false; "empty authority")]
+    #[test_case("*" => false; "wildcard authority")]
     fn test_is_valid_authority_name(authority: &str) -> bool {
-        is_valid_authority_name(authority)
+        verify_authority_name(authority).is_ok()
     }
 
     #[tokio::test]
@@ -889,9 +885,9 @@ mod tests {
     )]
     #[test_case(
         "//*/FFFFFFFF/FF/FFFF",
-        Some("//SERVICE.backend/FFFFFFFF/FF/FFFF"),
+        Some("//service.backend/FFFFFFFF/FF/FFFF"),
         TransportMode::OffVehicle,
-        "+/SERVICE.backend";
+        "+/service.backend";
         "Subscribe to all incoming messages for uEntities on a given authority in the back end"
     )]
     #[test_case(

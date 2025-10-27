@@ -158,11 +158,11 @@ mod tests {
     #[test_case(
         create_test_message(
             UMessageType::UMESSAGE_TYPE_PUBLISH,
-            "//VIN.vehicles/A8000/2/8A50",
+            "//vin.vehicles/A8000/2/8A50",
             None,
             "payload",
         ),
-        "VIN.vehicles/8000/A/2/8A50",
+        "vin.vehicles/8000/A/2/8A50",
         None,
         None;
         "succeeds for Publish message"
@@ -186,11 +186,11 @@ mod tests {
     #[test_case(
         create_test_message(
             UMessageType::UMESSAGE_TYPE_PUBLISH,
-            "//VIN.vehicles/A8000/2/8A50",
+            "//vin.vehicles/A8000/2/8A50",
             None,
             "payload",
         ),
-        "VIN.vehicles/8000/A/2/8A50",
+        "vin.vehicles/8000/A/2/8A50",
         Some(UCode::UNAVAILABLE),
         Some(UCode::UNAVAILABLE);
         "fails if not connected to broker"
@@ -199,10 +199,10 @@ mod tests {
         create_test_message(
             UMessageType::UMESSAGE_TYPE_NOTIFICATION,
             "/A8000/2/1A50",
-            Some("//VIN.vehicles/B8000/3/0"),
+            Some("//vin.vehicles/B8000/3/0"),
             "payload",
         ),
-        "VIN.vehicles/8000/A/2/1A50/VIN.vehicles/8000/B/3/0",
+        "vin.vehicles/8000/A/2/1A50/vin.vehicles/8000/B/3/0",
         None,
         None;
         "succeeds for Notification message"
@@ -210,11 +210,11 @@ mod tests {
     #[test_case(
         create_test_message(
             UMessageType::UMESSAGE_TYPE_REQUEST,
-            "//VIN.vehicles/A8000/2/0",
-            Some("//VIN.vehicles/B8000/3/10AB"),
+            "//vin.vehicles/A8000/2/0",
+            Some("//vin.vehicles/B8000/3/10AB"),
             "payload",
         ),
-        "VIN.vehicles/8000/A/2/0/VIN.vehicles/8000/B/3/10AB",
+        "vin.vehicles/8000/A/2/0/vin.vehicles/8000/B/3/10AB",
         None,
         None;
         "succeeds for Request message"
@@ -222,11 +222,11 @@ mod tests {
     #[test_case(
         create_test_message(
             UMessageType::UMESSAGE_TYPE_RESPONSE,
-            "//VIN.vehicles/B8000/3/10AB",
-            Some("//VIN.vehicles/A8000/2/0"),
+            "//vin.vehicles/B8000/3/10AB",
+            Some("//vin.vehicles/A8000/2/0"),
             "payload",
         ),
-        "VIN.vehicles/8000/B/3/10AB/VIN.vehicles/8000/A/2/0",
+        "vin.vehicles/8000/B/3/10AB/vin.vehicles/8000/A/2/0",
         None,
         None;
         "succeeds for Response message"
@@ -279,7 +279,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
-            authority_name: "VIN.vehicles".to_string(),
+            authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
         };
@@ -295,25 +295,25 @@ mod tests {
 
     // [utest->dsn~utransport-registerlistener-error-unimplemented~1]
     #[test_case(
-        "//VIN.vehicles/A8000/2/8A50",
+        "//vin.vehicles/A8000/2/8A50",
         None,
-        "VIN.vehicles/8000/A/2/8A50".to_string(),
+        "vin.vehicles/8000/A/2/8A50".to_string(),
         None,
         None;
         "succeeds for source filter"
     )]
     #[test_case(
-        "//VIN.vehicles/A8000/2/8A50",
+        "//vin.vehicles/A8000/2/8A50",
         None,
-        "VIN.vehicles/8000/A/2/8A50".to_string(),
+        "vin.vehicles/8000/A/2/8A50".to_string(),
         Some(UCode::UNAVAILABLE),
         Some(UCode::UNAVAILABLE);
         "fails if not connected to broker"
     )]
     #[test_case(
-        "//VIN.vehicles/FFFF8000/2/8A50",
-        Some("//VIN.vehicles/B8000/3/0"),
-        "VIN.vehicles/8000/+/2/8A50/VIN.vehicles/8000/B/3/0".to_string(),
+        "//vin.vehicles/FFFF8000/2/8A50",
+        Some("//vin.vehicles/B8000/3/0"),
+        "vin.vehicles/8000/+/2/8A50/vin.vehicles/8000/B/3/0".to_string(),
         None,
         None;
         "succeeds for source and sink filter"
@@ -343,7 +343,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: registered_listeners.clone(),
-            authority_name: "VIN.vehicles".to_string(),
+            authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
         };
@@ -374,28 +374,28 @@ mod tests {
     }
 
     #[test_case(
-        "//VIN.vehicles/FFFF8000/2/0",
+        "//vin.vehicles/FFFF8000/2/0",
         None;
         "for empty sink filter with source resource ID 0"
     )]
     #[test_case(
-        "//VIN.vehicles/FFFFFFFF/2/7FFF",
+        "//vin.vehicles/FFFFFFFF/2/7FFF",
         None;
         "for empty sink filter with RPC method source resource ID"
     )]
     #[test_case(
-        "//VIN.vehicles/FFFFA000/2/0",
-        Some("//VIN.vehicles/FFFFFFFF/3/0");
+        "//vin.vehicles/FFFFA000/2/0",
+        Some("//vin.vehicles/FFFFFFFF/3/0");
         "for source and sink filter having resource ID 0"
     )]
     #[test_case(
-        "//VIN.vehicles/A000/2/5555",
-        Some("//VIN.vehicles/B8000/3/1A00");
+        "//vin.vehicles/A000/2/5555",
+        Some("//vin.vehicles/B8000/3/1A00");
         "for RPC sink and source having RPC method resource ID"
     )]
     #[test_case(
-        "//VIN.vehicles/FFFFFFFF/2/B100",
-        Some("//VIN.vehicles/B8000/3/1A00");
+        "//vin.vehicles/FFFFFFFF/2/B100",
+        Some("//vin.vehicles/B8000/3/1A00");
         "for RPC sink and source having event resource ID"
     )]
     #[tokio::test]
@@ -409,7 +409,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
-            authority_name: "VIN.vehicles".to_string(),
+            authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
         };
@@ -441,23 +441,23 @@ mod tests {
 
     // [utest->dsn~utransport-unregisterlistener-error-unimplemented~1]
     #[test_case(
-        "//VIN.vehicles/A8000/2/8A50",
+        "//vin.vehicles/A8000/2/8A50",
         None,
-        "VIN.vehicles/8000/A/2/8A50".to_string(),
+        "vin.vehicles/8000/A/2/8A50".to_string(),
         None;
         "succeeds for source filter"
     )]
     #[test_case(
-        "//VIN.vehicles/A8000/2/8A50",
+        "//vin.vehicles/A8000/2/8A50",
         None,
-        "VIN.vehicles/8000/A/2/8A50".to_string(),
+        "vin.vehicles/8000/A/2/8A50".to_string(),
         Some(UCode::UNAVAILABLE);
         "fails if not connected to broker"
     )]
     #[test_case(
-        "//VIN.vehicles/FFFF8000/2/8A50",
-        Some("//VIN.vehicles/B8000/3/0"),
-        "VIN.vehicles/8000/+/2/8A50/VIN.vehicles/8000/B/3/0".to_string(),
+        "//vin.vehicles/FFFF8000/2/8A50",
+        Some("//vin.vehicles/B8000/3/0"),
+        "vin.vehicles/8000/+/2/8A50/vin.vehicles/8000/B/3/0".to_string(),
         None;
         "succeeds for source and sink filter"
     )]
@@ -492,7 +492,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: registered_listeners.clone(),
-            authority_name: "VIN.vehicles".to_string(),
+            authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
         };
@@ -537,7 +537,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
-            authority_name: "VIN.vehicles".to_string(),
+            authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
         };

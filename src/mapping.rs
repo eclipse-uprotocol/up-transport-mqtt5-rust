@@ -684,7 +684,7 @@ mod tests {
             Some(CURRENT_UPROTOCOL_MAJOR_VERSION),
             Some(UMessageType::UMESSAGE_TYPE_PUBLISH),
             Some(&UUID::build()),
-            Some("//VIN.vehicles/A8000/2/8A50"),
+            Some("//vin.vehicles/A8000/2/8A50"),
             None,
             Some(UPriority::UPRIORITY_CS5),
             None, None, None, None, None, None,
@@ -705,8 +705,8 @@ mod tests {
                 lsb: 0x8010101010101a1a_u64,
                 ..Default::default()
             }),
-            Some("//VIN.vehicles/A8000/2/1A50"),
-            Some("//VIN.vehicles/B8000/3/0"),
+            Some("//vin.vehicles/A8000/2/1A50"),
+            Some("//vin.vehicles/B8000/3/0"),
             None,
             // do not expire
             Some(0),
@@ -723,8 +723,8 @@ mod tests {
             Some(CURRENT_UPROTOCOL_MAJOR_VERSION),
             Some(UMessageType::UMESSAGE_TYPE_REQUEST),
             Some(&UUID::build()),
-            Some("//VIN.vehicles/A8000/2/0"),
-            Some("//VIN.vehicles/B8000/3/1B50"),
+            Some("//vin.vehicles/A8000/2/0"),
+            Some("//vin.vehicles/B8000/3/1B50"),
             Some(UPriority::UPRIORITY_CS4),
             Some(5400),
             Some(MSG_PERMISSION_LEVEL),
@@ -741,8 +741,8 @@ mod tests {
             Some(CURRENT_UPROTOCOL_MAJOR_VERSION),
             Some(UMessageType::UMESSAGE_TYPE_RESPONSE),
             Some(&UUID::build()),
-            Some("//VIN.vehicles/B8000/3/1B50"),
-            Some("//VIN.vehicles/A8000/2/0"),
+            Some("//vin.vehicles/B8000/3/1B50"),
+            Some("//vin.vehicles/A8000/2/0"),
             Some(UPriority::UPRIORITY_CS4),
             Some(3000),
             None,
@@ -761,7 +761,7 @@ mod tests {
             Some(UMessageType::UMESSAGE_TYPE_PUBLISH),
             Some(&UUID::build()),
             // source must have resource ID >= 0x8000
-            Some("//VIN.vehicles/A8000/2/1A50"),
+            Some("//vin.vehicles/A8000/2/1A50"),
             None, None, None, None, None, None, None, None, None
         ),
         Some(UCode::INVALID_ARGUMENT);
@@ -772,7 +772,7 @@ mod tests {
             Some(CURRENT_UPROTOCOL_MAJOR_VERSION + 1),
             Some(UMessageType::UMESSAGE_TYPE_PUBLISH),
             Some(&UUID::build()),
-            Some("//VIN.vehicles/A8000/2/AA50"),
+            Some("//vin.vehicles/A8000/2/AA50"),
             None, None, None, None, None, None, None, None, None
         ),
         Some(UCode::INVALID_ARGUMENT);
@@ -789,7 +789,7 @@ mod tests {
                 lsb: 0x8010101010101a1a_u64,
                 ..Default::default()
             }),
-            Some("//VIN.vehicles/A8000/2/AA50"),
+            Some("//vin.vehicles/A8000/2/AA50"),
             None,
             None,
             // message expiry interval: 12.5s
