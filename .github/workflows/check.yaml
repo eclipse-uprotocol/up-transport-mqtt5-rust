@@ -102,6 +102,8 @@ jobs:
 
   check-links:
     # check links contained in markdown and source code files
+    # sadly, lychee does not (yet) support checking links in Asciidoc files
+    # https://github.com/lycheeverse/lychee/issues/291
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -117,8 +119,8 @@ jobs:
       - name: Run lychee
         uses: lycheeverse/lychee-action@v2
         with:
-          args: "--cache --max-cache-age 1d --verbose --no-progress --exclude-path './target/' --exclude-path './up-spec/' -- './**/*.md' './**/*.rs'"
-        
+          args: --cache --max-cache-age 1d --verbose --no-progress --exclude-path "^\/target\/.*" --exclude-path "^\/up-spec\/.*" -- "./**/*.md" "./**/*.rs" "./**/*.toml" "./**/*.yaml"
+
   feature-check:
     # Comprehensive check on dependencies for all feature flag combinations, excluding development dependencies
     needs: check
