@@ -15,13 +15,13 @@
 description = "The Eclipse uProtocol MQTT 5 Transport Library"
 edition = "2021"
 exclude = ["tests/*", "tools/*", ".devcontainer/*", ".vscode/*", ".github/*", ".gitignore"]
-homepage = "https://github.com/eclipse-uprotocol/up-client-mqtt5-rust"
+homepage = "https://github.com/eclipse-uprotocol/up-transport-mqtt5-rust"
 keywords = ["uProtocol", "SDK", "MQTT", "MQTT5"]
 license = "Apache-2.0"
 name = "up-transport-mqtt5"
 readme = "README.md"
-repository = "https://github.com/eclipse-uprotocol/up-client-mqtt5-rust"
-rust-version = "1.82"
+repository = "https://github.com/eclipse-uprotocol/up-transport-mqtt5-rust"
+rust-version = "1.88"
 version = "0.4.0-SNAPSHOT"
 
 [features]
@@ -58,9 +58,9 @@ testcontainers = { version = "0.25.1", features = ["blocking"] }
 env_logger = { version = "0.11.8" }
 mockall = { version = "0.13.1" }
 serial_test = { version = "3.2.0" }
-tempfile = { version = "3.20.0" }
+tempfile = { version = "3.23.0" }
 test-case = { version = "3.3.1" }
-testcontainers = { version = "0.25.1" }
+testcontainers = { version = "0.25.2" }
 tokio = { version = "1.45.1", default-features = false, features = [
     "macros",
     "rt",
