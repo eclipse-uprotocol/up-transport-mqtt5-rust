@@ -79,7 +79,7 @@ The libraries need to be added to the `[dependencies]` section of the `Cargo.tom
 
 ```toml
 [dependencies]
-up-rust = { version = "0.8" }
+up-rust = { version = "0.9" }
 up-transport-mqtt5 = { version = "0.4" }
 ```
 
