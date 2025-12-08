@@ -82,11 +82,6 @@ impl RegisteredListeners {
         self.ignored_message_listener = Some(ComparableListener::new(listener));
     }
 
-    #[cfg(test)]
-    pub(crate) fn get_ignored_message_listener(&self) -> Option<ComparableListener> {
-        self.ignored_message_listener.clone()
-    }
-
     /// Resets this registry to its initial state.
     /// This includes removing all registered listeners, topic filters and subscription identifiers.
     pub(crate) fn clear(&mut self) {
@@ -273,9 +268,27 @@ impl RegisteredListeners {
         }
         true
     }
+}
 
+#[cfg_attr(test, mockall::automock)]
+pub(crate) trait ListenerRegistry: Send + Sync {
     /// Determines listeners registered for topic filters that match a given topic.
-    pub(crate) fn determine_listeners_for_topic(&self, topic: &str) -> HashSet<ComparableListener> {
+    fn determine_listeners_for_topic(&self, topic: &str) -> HashSet<ComparableListener>;
+
+    /// Determines listeners registered for a given subscription ID.
+    fn determine_listeners_for_subscription_id(
+        &self,
+        subscription_id: SubscriptionIdentifier,
+    ) -> Option<HashSet<ComparableListener>>;
+
+    #[cfg(test)]
+    /// Gets the listener that should be invoked for messages that don't match any registered listeners.
+    fn get_ignored_message_listener(&self) -> Option<ComparableListener>;
+}
+
+impl ListenerRegistry for RegisteredListeners {
+    /// Determines listeners registered for topic filters that match a given topic.
+    fn determine_listeners_for_topic(&self, topic: &str) -> HashSet<ComparableListener> {
         let mut listeners_to_invoke = HashSet::new();
         self.subscriptions_by_topic_filter.matches(topic).for_each(
             |(_topic_filter, (_subscription_id, listeners))| {
@@ -288,13 +301,18 @@ impl RegisteredListeners {
     }
 
     /// Determines listeners registered for a given subscription ID.
-    pub(crate) fn determine_listeners_for_subscription_id(
+    fn determine_listeners_for_subscription_id(
         &self,
         subscription_id: SubscriptionIdentifier,
-    ) -> Option<&HashSet<ComparableListener>> {
+    ) -> Option<HashSet<ComparableListener>> {
         self.subscriptions_by_id
             .get(subscription_id.into())
-            .map(|(_topic_filter, listeners)| listeners)
+            .map(|(_topic_filter, listeners)| listeners.clone())
+    }
+
+    #[cfg(test)]
+    fn get_ignored_message_listener(&self) -> Option<ComparableListener> {
+        self.ignored_message_listener.clone()
     }
 }
 
@@ -347,9 +365,10 @@ mod tests {
             .expect("Failed to register listener")
             .expect("Did not create new subscription ID");
 
-        let listeners =
-            registered_listeners.determine_listeners_for_subscription_id(subscription_id);
-        assert!(listeners.unwrap().len() == 1 && listeners.unwrap().contains(&expected_listener));
+        let listeners = registered_listeners
+            .determine_listeners_for_subscription_id(subscription_id)
+            .expect("Failed to determine listeners for subscription ID");
+        assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
         let listeners = registered_listeners.determine_listeners_for_topic(topic);
         assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
 
@@ -400,14 +419,12 @@ mod tests {
             .expect("Failed to register listener")
             .expect("Did not create new subscription ID");
 
-        let listeners =
-            registered_listeners.determine_listeners_for_subscription_id(subscription_id);
+        let listeners = registered_listeners
+            .determine_listeners_for_subscription_id(subscription_id)
+            .expect("Failed to determine listeners for subscription ID");
 
         assert!(
-            listeners.unwrap().len() == 1
-                && listeners
-                    .unwrap()
-                    .contains(&ComparableListener::new(listener.clone())),
+            listeners.len() == 1 && listeners.contains(&ComparableListener::new(listener.clone())),
             "It should have been possible to register a single listener for one topic filter"
         );
 
@@ -446,17 +463,16 @@ mod tests {
             .add_listener(topic_1, listener.clone())
             .expect("Failed to register listener")
             .expect("Did not create new subscription ID");
-        let subscription_id_2 = registered_listeners
+        let _subscription_id_2 = registered_listeners
             .add_listener(topic_2, listener.clone())
             .expect("Failed to register listener")
             .expect("Did not create new subscription ID");
 
-        let listeners =
-            registered_listeners.determine_listeners_for_subscription_id(subscription_id_1);
-        let _listener_id_2 =
-            registered_listeners.determine_listeners_for_subscription_id(subscription_id_2);
+        let listeners = registered_listeners
+            .determine_listeners_for_subscription_id(subscription_id_1)
+            .expect("Failed to determine listeners for subscription ID");
 
-        assert!(listeners.unwrap().len() == 1 && listeners.unwrap().contains(&expected_listener));
+        assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
         let listeners = registered_listeners.determine_listeners_for_topic(topic_1);
         assert!(listeners.len() == 1 && listeners.contains(&expected_listener));
         let listeners = registered_listeners.determine_listeners_for_topic(topic_2);
@@ -482,23 +498,26 @@ mod tests {
             .expect("Failed to register listener 2")
             .is_none());
 
-        let listeners =
-            registered_listeners.determine_listeners_for_subscription_id(subscription_id);
+        let listeners = registered_listeners
+            .determine_listeners_for_subscription_id(subscription_id)
+            .expect("Failed to determine listeners for subscription ID");
         assert!(
-            listeners.unwrap().len() == 2
-                && listeners.unwrap().contains(&comparable_listener_1)
-                && listeners.unwrap().contains(&comparable_listener_2)
+            listeners.len() == 2
+                && listeners.contains(&comparable_listener_1)
+                && listeners.contains(&comparable_listener_2)
         );
 
         assert!(!registered_listeners.is_last_listener(topic_filter, listener_1.clone()));
         assert!(registered_listeners.remove_listener(topic_filter, listener_1.clone()));
 
-        let listeners =
-            registered_listeners.determine_listeners_for_subscription_id(subscription_id);
-        println!("{}", listeners.unwrap().len());
-        assert!(listeners.is_some_and(|l| l.len() == 1
-            && !l.contains(&comparable_listener_1)
-            && l.contains(&comparable_listener_2)));
+        let listeners = registered_listeners
+            .determine_listeners_for_subscription_id(subscription_id)
+            .expect("Failed to determine listeners for subscription ID");
+        assert!(
+            listeners.len() == 1
+                && !listeners.contains(&comparable_listener_1)
+                && listeners.contains(&comparable_listener_2)
+        );
 
         assert!(registered_listeners.is_last_listener(topic_filter, listener_2.clone()));
         assert!(registered_listeners.remove_listener(topic_filter, listener_2.clone()));

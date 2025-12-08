@@ -26,7 +26,6 @@ allow = [
     # Unicode-3.0 is not (yet) on the Eclipse Foundation's list of approved licenses
     # however, all of its predecessors are, thus we assume that 3.0 is also ok to use
     "Unicode-3.0",
-    "Zlib",
 ]
 private = { ignore = true }
 
@@ -35,6 +34,12 @@ multiple-versions = "deny"
 wildcards = "deny"
 skip-tree = [
     { crate = "windows-sys", reason = "a foundational crate for many that bumps far too frequently to ever have a shared version" },
-    { crate = "getrandom@0.2.15", reason = "an outdated version that is still used by some other crates we depend on" },
     { crate = "testcontainers", reason = "this crate (and its deps) is only used for testing" },
+]
+
+[advisories]
+ignore = [
+    # this affects a transitive dependency via testcontainers which is only used during
+    # the build and test process
+    "RUSTSEC-2025-0134",
 ]
