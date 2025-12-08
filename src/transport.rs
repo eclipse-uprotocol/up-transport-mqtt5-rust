@@ -101,8 +101,10 @@ mod tests {
     use tokio::sync::RwLock;
 
     use crate::{
-        listener_registry::RegisteredListeners, mapping::create_uattributes_from_mqtt_properties,
-        mqtt_client::MockMqttClientOperations, TransportMode,
+        listener_registry::{ListenerRegistry, RegisteredListeners},
+        mapping::MessageMapper,
+        mqtt_client::MockMqttClientOperations,
+        TransportMode,
     };
 
     use super::*;
@@ -254,8 +256,11 @@ mod tests {
                         owned_topic,
                         "MQTT message has unexpected topic"
                     );
+                    let mapper = crate::mapping::DefaultMessageMapper;
                     // now check if we can recreate the original message from the MQTT message
-                    let attributes = create_uattributes_from_mqtt_properties(msg.properties()).ok();
+                    let attributes = mapper
+                        .create_uattributes_from_mqtt_properties(msg.properties())
+                        .ok();
                     // [utest->dsn~up-transport-mqtt5-payload-mapping~1]
                     let payload = if msg.payload().is_empty() {
                         None
@@ -279,6 +284,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
+            message_mapper: Arc::new(crate::mapping::DefaultMessageMapper),
             authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -343,6 +349,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: registered_listeners.clone(),
+            message_mapper: Arc::new(crate::mapping::DefaultMessageMapper),
             authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -409,6 +416,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
+            message_mapper: Arc::new(crate::mapping::DefaultMessageMapper),
             authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -492,6 +500,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: registered_listeners.clone(),
+            message_mapper: Arc::new(crate::mapping::DefaultMessageMapper),
             authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -537,6 +546,7 @@ mod tests {
         let client = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
+            message_mapper: Arc::new(crate::mapping::DefaultMessageMapper),
             authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,

@@ -31,7 +31,7 @@ cli = ["clap"]
 [dependencies]
 async-channel = { version = "1.9" }
 async-trait = { version = "0.1" }
-backon = { version = "1.5", default-features = false, features = ["tokio-sleep"] }
+backon = { version = "1.6", default-features = false, features = ["tokio-sleep"] }
 bytes = { version = "1.10.1" }
 clap = { version = "4.5", optional = true, default-features = false, features = [
     "std",
@@ -52,15 +52,15 @@ tokio = { version = "1.45.1", default-features = false, features = ["rt", "rt-mu
 up-rust = { version = "0.9", default-features = false }
 
 [build-dependencies]
-testcontainers = { version = "0.25.1", features = ["blocking"] }
+testcontainers = { version = "0.26.0", default-features = false, features = ["blocking"] }
 
 [dev-dependencies]
 env_logger = { version = "0.11.8" }
-mockall = { version = "0.13.1" }
+mockall = { version = "0.14.0" }
 serial_test = { version = "3.2.0" }
 tempfile = { version = "3.23.0" }
 test-case = { version = "3.3.1" }
-testcontainers = { version = "0.25.2" }
+testcontainers = { version = "0.26.0", default-features = false }
 tokio = { version = "1.45.1", default-features = false, features = [
     "macros",
     "rt",

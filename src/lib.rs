@@ -217,37 +217,38 @@ impl TransportMode {
 }
 
 async fn process_incoming_message(
-    registered_listeners: &Arc<RwLock<RegisteredListeners>>,
+    registered_listeners: &dyn listener_registry::ListenerRegistry,
+    message_mapper: &dyn mapping::MessageMapper,
     mqtt_message: paho_mqtt::Message,
 ) {
     // extract uProtocol message from MQTT PUBLISH packet
-    let umessage = match mapping::create_uattributes_from_mqtt_properties(mqtt_message.properties())
-    {
-        Ok(uattributes) => UMessage {
-            attributes: Some(uattributes).into(),
-            payload: Some(Bytes::copy_from_slice(mqtt_message.payload())),
-            ..Default::default()
-        },
-        Err(e) => {
-            debug!("Failed to map MQTT PUBLISH packet to uProtocol message: {e}");
-            return;
-        }
-    };
+    let umessage =
+        match message_mapper.create_uattributes_from_mqtt_properties(mqtt_message.properties()) {
+            Ok(uattributes) => UMessage {
+                attributes: Some(uattributes).into(),
+                payload: Some(Bytes::copy_from_slice(mqtt_message.payload())),
+                ..Default::default()
+            },
+            Err(e) => {
+                // [impl->dsn~utransport-registerlistener-discard-invalid-messages~1]
+                debug!("Failed to map MQTT PUBLISH packet to uProtocol message: {e}");
+                return;
+            }
+        };
 
     // [impl->dsn~utransport-registerlistener-start-invoking-listeners~1]
     // [impl->dsn~utransport-unregisterlistener-stop-invoking-listeners~1]
     let listeners_to_invoke = {
-        let registered_listeners_read = registered_listeners.read().await;
         #[cfg(not(test))]
         {
-            determine_listeners(&registered_listeners_read, &mqtt_message)
+            determine_listeners(registered_listeners, &mqtt_message)
         }
         #[cfg(test)]
         {
-            let mut listeners = determine_listeners(&registered_listeners_read, &mqtt_message);
+            let mut listeners = determine_listeners(registered_listeners, &mqtt_message);
             if listeners.is_empty() {
                 if let Some(ignored_message_handler) =
-                    registered_listeners_read.get_ignored_message_listener()
+                    registered_listeners.get_ignored_message_listener()
                 {
                     debug!("No listeners registered for MQTT message, invoking ignored message listener instead.");
                     listeners.insert(ignored_message_handler);
@@ -269,7 +270,7 @@ async fn process_incoming_message(
 }
 
 fn determine_listeners(
-    registered_listeners: &RegisteredListeners,
+    registered_listeners: &dyn listener_registry::ListenerRegistry,
     mqtt_message: &paho_mqtt::Message,
 ) -> HashSet<ComparableListener> {
     let subscription_ids: Vec<SubscriptionIdentifier> = mqtt_message
@@ -285,7 +286,6 @@ fn determine_listeners(
             .iter()
             .filter_map(|&id| registered_listeners.determine_listeners_for_subscription_id(id))
             .flatten()
-            .cloned()
             .collect()
     }
 }
@@ -327,6 +327,7 @@ pub struct Mqtt5Transport {
     /// Client instance for connecting to mqtt broker.
     mqtt_client: Arc<dyn MqttClientOperations>,
     registered_listeners: Arc<RwLock<RegisteredListeners>>,
+    message_mapper: Arc<dyn mapping::MessageMapper>,
     /// My authority
     authority_name: String,
     /// The transport's mode of operation.
@@ -369,6 +370,7 @@ impl Mqtt5Transport {
         let mut transport = Self {
             mqtt_client: Arc::new(client_operations),
             registered_listeners,
+            message_mapper: Arc::new(mapping::DefaultMessageMapper),
             authority_name: authority,
             mode: options.mode,
             message_callback_handle: None,
@@ -381,7 +383,13 @@ impl Mqtt5Transport {
 
     #[cfg(test)]
     pub(crate) async fn process_incoming_message(&self, mqtt_message: paho_mqtt::Message) {
-        process_incoming_message(&self.registered_listeners, mqtt_message).await;
+        let registered_listeners_read = self.registered_listeners.read().await;
+        process_incoming_message(
+            &*registered_listeners_read,
+            &*self.message_mapper,
+            mqtt_message,
+        )
+        .await;
     }
 
     /// Establishes the initial connection to the MQTT broker.
@@ -424,6 +432,7 @@ impl Mqtt5Transport {
     fn create_cb_message_handler(&mut self, mut message_stream: Receiver<Option<Message>>) {
         let cloned_client_operations = self.mqtt_client.clone();
         let cloned_registered_listeners = self.registered_listeners.clone();
+        let cloned_message_mapper = self.message_mapper.clone();
         let handle = tokio::spawn(async move {
             while let Some(msg_opt) = message_stream.next().await {
                 let Some(msg) = msg_opt else {
@@ -439,7 +448,9 @@ impl Mqtt5Transport {
                         .get_string(paho_mqtt::PropertyCode::ContentType)
                         .unwrap_or_else(|| "N/A".to_string())
                 );
-                process_incoming_message(&cloned_registered_listeners, msg).await;
+                let registered_listeners_read = cloned_registered_listeners.read().await;
+                process_incoming_message(&*registered_listeners_read, &*cloned_message_mapper, msg)
+                    .await;
             }
         });
         self.message_callback_handle = Some(handle);
@@ -467,7 +478,9 @@ impl Mqtt5Transport {
         payload: Option<Bytes>,
     ) -> Result<(), UStatus> {
         // put metadata into MQTT 5 message properties
-        let props = mapping::create_mqtt_properties_from_uattributes(attributes)?;
+        let props = self
+            .message_mapper
+            .create_mqtt_properties_from_uattributes(attributes)?;
 
         // Get mqtt topic string from source and sink uuris
         let src_uri = attributes.source.as_ref().ok_or_else(|| {
@@ -602,6 +615,7 @@ mod tests {
     use super::*;
 
     fn create_mqtt_publish_message(
+        message_mapper: &dyn mapping::MessageMapper,
         uuid: &UUID,
         source: &UUri,
         payload: &str,
@@ -613,13 +627,14 @@ mod tests {
         let mqtt_topic = TransportMode::InVehicle
             .to_mqtt_topic(source, None, "test_authority")
             .expect("failed to create MQTT topic string");
-        let props = crate::mapping::create_mqtt_properties_from_uattributes(
-            umessage
-                .attributes
-                .as_ref()
-                .expect("UMessage has no attributes"),
-        )
-        .expect("invalid uattributes");
+        let props = message_mapper
+            .create_mqtt_properties_from_uattributes(
+                umessage
+                    .attributes
+                    .as_ref()
+                    .expect("UMessage has no attributes"),
+            )
+            .expect("invalid uattributes");
         paho_mqtt::MessageBuilder::new()
             .topic(mqtt_topic)
             .payload(payload)
@@ -651,6 +666,7 @@ mod tests {
         let mqtt_transport = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
+            message_mapper: Arc::new(mapping::DefaultMessageMapper),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -672,13 +688,17 @@ mod tests {
         client_operations.expect_subscribe().return_const(Ok(()));
         client_operations.expect_unsubscribe().return_const(Ok(()));
 
-        let message_id_1 = UUID::build();
-        let message_1 = create_mqtt_publish_message(&message_id_1, &source, "some payload");
-        let message_id_2 = UUID::build();
-        let message_2 = create_mqtt_publish_message(&message_id_2, &source, "some payload");
-        let message_id_3 = UUID::build();
-        let message_3 = create_mqtt_publish_message(&message_id_3, &source, "some payload");
+        let message_mapper = mapping::DefaultMessageMapper;
 
+        let message_id_1 = UUID::build();
+        let message_1 =
+            create_mqtt_publish_message(&message_mapper, &message_id_1, &source, "some payload");
+        let message_id_2 = UUID::build();
+        let message_2 =
+            create_mqtt_publish_message(&message_mapper, &message_id_2, &source, "some payload");
+        let message_id_3 = UUID::build();
+        let message_3 =
+            create_mqtt_publish_message(&message_mapper, &message_id_3, &source, "some payload");
         let mut expected_ignored_message_ids = VecDeque::new();
         expected_ignored_message_ids.push_front(message_id_1.clone());
         expected_ignored_message_ids.push_front(message_id_3.clone());
@@ -700,6 +720,7 @@ mod tests {
         let transport = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(listener_registry)),
+            message_mapper: Arc::new(mapping::DefaultMessageMapper),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -765,6 +786,7 @@ mod tests {
         let mqtt_transport = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(registered_listeners)),
+            message_mapper: Arc::new(mapping::DefaultMessageMapper),
             authority_name: "test".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -945,6 +967,7 @@ mod tests {
         let mqtt_transport = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
+            message_mapper: Arc::new(mapping::DefaultMessageMapper),
             authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
@@ -962,10 +985,50 @@ mod tests {
         let mqtt_transport = Mqtt5Transport {
             mqtt_client: Arc::new(client_operations),
             registered_listeners: Arc::new(RwLock::new(RegisteredListeners::default())),
+            message_mapper: Arc::new(mapping::DefaultMessageMapper),
             authority_name: "vin.vehicles".to_string(),
             mode: TransportMode::InVehicle,
             message_callback_handle: None,
         };
         mqtt_transport.shutdown().await;
+    }
+
+    #[tokio::test]
+    // [utest->dsn~utransport-registerlistener-discard-invalid-messages~1]
+    async fn test_process_incoming_message_discards_invalid_message() {
+        use listener_registry::MockListenerRegistry;
+        use mapping::MockMessageMapper;
+
+        // Create a mock message validator that returns an error (simulating invalid message)
+        let mut mock_validator = MockMessageMapper::new();
+        mock_validator
+            .expect_create_uattributes_from_mqtt_properties()
+            .once()
+            .returning(|_| {
+                Err(UStatus::fail_with_code(
+                    UCode::INVALID_ARGUMENT,
+                    "Invalid MQTT message properties",
+                ))
+            });
+
+        // Create a mock listener registry that should NOT be called
+        let mut mock_registry = MockListenerRegistry::new();
+        mock_registry.expect_determine_listeners_for_topic().never();
+        mock_registry
+            .expect_determine_listeners_for_subscription_id()
+            .never();
+
+        // Create a test MQTT message
+        let mqtt_message = paho_mqtt::MessageBuilder::new()
+            .topic("test.authority/A000/0/2/8A50")
+            .payload("test payload")
+            .finalize();
+
+        // Process the message - it should be discarded due to validation error
+        process_incoming_message(&mock_registry, &mock_validator, mqtt_message).await;
+
+        // If the test completes without panic, it means:
+        // 1. The validator was called exactly once
+        // 2. The listener registry methods were never called (message was discarded)
     }
 }
