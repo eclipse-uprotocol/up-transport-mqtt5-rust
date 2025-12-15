@@ -14,7 +14,7 @@
 use std::{str::FromStr, time::SystemTime};
 
 use backon::{ExponentialBuilder, Retryable};
-use clap::{command, Parser};
+use clap::Parser;
 use log::{error, info};
 use up_rust::{UMessageBuilder, UPayloadFormat, UStatus, UTransport, UUri};
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions};
