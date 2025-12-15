@@ -19,7 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
-use clap::{command, Parser};
+use clap::Parser;
 use log::{error, info};
 use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions};
