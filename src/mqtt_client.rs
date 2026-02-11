@@ -61,6 +61,7 @@ const DEFAULT_MAX_BUFFERED_MESSAGES: u16 = 0;
 const DEFAULT_SESSION_EXPIRY_INTERVAL: u32 = 0;
 
 #[cfg_attr(feature = "cli", derive(Args))]
+#[derive(Clone)]
 /// Configuration options for the MQTT client to use for connecting to the broker.
 pub struct MqttClientOptions {
     /// The client identifier to use in the MQTT CONNECT Packet.
