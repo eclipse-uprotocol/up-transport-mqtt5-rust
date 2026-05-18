@@ -61,8 +61,8 @@ serial_test = { version = "3.2.0" }
 tempfile = { version = "3.23.0" }
 test-case = { version = "3.3.1" }
 testcontainers = { version = "0.27.2", default-features = false }
-# https://rustsec.org/advisories/RUSTSEC-2026-0049
-rustls-webpki = { version = "0.103.10" }
+# https://rustsec.org/advisories/RUSTSEC-2026-0099
+rustls-webpki = { version = "0.103.13" }
 # https://rustsec.org/advisories/RUSTSEC-2026-0009
 time = { version = "0.3.47" }
 tokio = { version = "1.45.1", default-features = false, features = [
