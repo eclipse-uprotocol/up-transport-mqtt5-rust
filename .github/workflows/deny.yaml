@@ -33,6 +33,6 @@ env:
 
 jobs:
   deny:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-deny-check.yaml@main
+    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-deny-check.yaml@c9fb74b20429e69c15021c64dcf343447a2f46a2 # main
     with:
       arguments: --all-features --locked --exclude-dev

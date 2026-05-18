@@ -29,10 +29,10 @@ jobs:
     uses: ./.github/workflows/check.yaml
 
   check-msrv:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-verify-msrv.yaml@main
+    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-verify-msrv.yaml@c9fb74b20429e69c15021c64dcf343447a2f46a2 # main
 
   coverage:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-coverage.yaml@main
+    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-coverage.yaml@c9fb74b20429e69c15021c64dcf343447a2f46a2 # main
 
   current-spec-compliance:
     runs-on: ubuntu-latest
@@ -40,25 +40,25 @@ jobs:
     # because we do not want the job to fail if not all requirements
     # are covered (yet)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: "recursive"
       - name: "Determine OpenFastTrace file patterns from .env file"
-        uses: xom9ikk/dotenv@v2.3.0
+        uses: xom9ikk/dotenv@ac290ca23a42155a0cba1031d23afa46240116a9 # v2.3.0
         with:
           mode: "oft-current"
           load-mode: strict
         # this will run OFT and upload the results
       - name: Run OpenFastTrace
         id: run-oft
-        uses: eclipse-uprotocol/ci-cd/.github/actions/run-oft@main
+        uses: eclipse-uprotocol/ci-cd/.github/actions/run-oft@c9fb74b20429e69c15021c64dcf343447a2f46a2 # main
         with:
           file-patterns: "${{ env.OFT_FILE_PATTERNS }}"
           tags: "${{ env.OFT_TAGS_}}"
 
   licenses:
     # This works off the license declarations in dependent packages/crates, so if these declarations are wrong, this report will contain erroneous information
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-license-report.yaml@main
+    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-license-report.yaml@c9fb74b20429e69c15021c64dcf343447a2f46a2 # main
     with:
       templates: "about.hbs"
       config: "about.toml"
@@ -76,24 +76,24 @@ jobs:
       - licenses
     permissions: write-all
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: "recursive"
 
       - name: "Determine uProtocol Specification file patterns from .env file"
-        uses: xom9ikk/dotenv@v2.3.0
+        uses: xom9ikk/dotenv@ac290ca23a42155a0cba1031d23afa46240116a9 # v2.3.0
         with:
           mode: oft-current
           load-mode: strict
 
       # License report - we later need the download_url output of the upload step
       - name: Download license report
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: license-report
           path: dist/license/
       - name: Upload license report to release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # latest
         id: upload_license_report
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -103,12 +103,12 @@ jobs:
 
       # Requirements Tracing report - we later need the download_url output of the upload step
       - name: Download requirements tracing report
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: tracing-report-html
           path: dist/tracing/
       - name: Upload requirements tracing report to release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # latest
         id: upload_requirements_tracing_report
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -118,12 +118,12 @@ jobs:
 
       # Test report - we later need the download_url output of the upload step
       - name: Download test report
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: test-results
           path: dist/tests/
       - name: Upload test report to release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # latest
         id: upload_test_report
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -133,12 +133,12 @@ jobs:
 
       # Test coverage - we later need the download_url output of the upload step
       - name: Download test coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: code-coverage-html
           path: dist/codecov/
       - name: Upload test coverage to release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # latest
         id: upload_test_coverage
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -148,7 +148,7 @@ jobs:
 
       # README - we later need the download_url output of the upload step
       - name: Upload README to release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # latest
         id: upload_readme
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -160,7 +160,7 @@ jobs:
         run: |
           tar cvz --file up-spec.tar.gz ${{ env.UP_SPEC_FILE_PATTERNS }}
       - name: Upload relevant uProtocol Spec files to release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # latest
         id: upload_up_spec
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -169,12 +169,12 @@ jobs:
 
       - name: Gets latest created release info
         id: latest_release_info
-        uses: joutvhu/get-release@v1
+        uses: joutvhu/get-release@9a8271732adc3299a22f8ad09b0a67eb3aa836ac # v1.0.3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     
       - name: Collect quality artifacts
-        uses: eclipse-dash/quevee@v1
+        uses: eclipse-dash/quevee@b62d7faa1cf68654758754aaed8616b19f227583 # v1.0.0
         id: quevee_manifest
         with:          
           release_url: ${{ steps.latest_release_info.outputs.html_url }}
@@ -184,7 +184,7 @@ jobs:
           artifacts_testing: ${{ steps.upload_test_report.outputs.browser_download_url }},${{ steps.upload_test_coverage.outputs.browser_download_url }},${{ steps.upload_requirements_tracing_report.outputs.browser_download_url }}
 
       - name: Upload manifest to release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # latest
         id: upload_quality_manifest
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -200,7 +200,7 @@ jobs:
     env: 
       CRATES_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: "recursive"
 
