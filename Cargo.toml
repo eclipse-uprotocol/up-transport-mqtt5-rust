@@ -57,8 +57,8 @@ up-rust = { version = "0.9", default-features = false }
 testcontainers = { version = "0.27.3", default-features = false, features = ["blocking"] }
 
 [dev-dependencies]
-# https://rustsec.org/advisories/RUSTSEC-2026-0112
-astral-tokio-tar = { version = "0.6.1" }
+# https://rustsec.org/advisories/RUSTSEC-2026-0145
+astral-tokio-tar = { version = "0.6.2" }
 env_logger = { version = "0.11.10" }
 mockall = { version = "0.14.0" }
 serial_test = { version = "3.2.0" }
