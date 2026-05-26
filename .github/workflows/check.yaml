@@ -20,6 +20,7 @@ on:
   push:
     branches: 
       - main
+      - try_to_fix_build_on_windows
   pull_request:
     paths:
       - "examples/**"
@@ -43,6 +44,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  build-on-windows:
+    name: build and test on Windows
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: "recursive"
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+            toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Run tests
+        run: |
+          RUSTFLAGS="-Dwarnings -ladvapi32" cargo test --no-fail-fast --all-features --all-targets
+
   check:
     runs-on: ubuntu-latest
     steps:
