@@ -31,12 +31,19 @@ env:
   RUSTFLAGS: -Dwarnings
   CARGO_TERM_COLOR: always
 
+permissions: {}
+
 jobs:
   requirements-tracing:
+    name: "Verify compatibility with latest uProtocol Spec"
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required by the run-oft action for uploading requirements tracing results
+
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           submodules: "recursive"
       - name: Fast-Forward to HEAD revision of uProtocol Spec main branch
         run: |
