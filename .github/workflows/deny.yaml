@@ -16,23 +16,26 @@
 name: Deny
 
 on:
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-  workflow_dispatch:
+    pull_request:
+        paths:
+            - "Cargo.toml"
+            - "Cargo.lock"
+    workflow_dispatch:
 
 concurrency:
-  group: ${{ github.ref }}-${{ github.workflow }}
-  cancel-in-progress: true
+    group: ${{ github.ref }}-${{ github.workflow }}
+    cancel-in-progress: true
 
 env:
-  RUST_TOOLCHAIN: ${{ vars.RUST_TOOLCHAIN || 'stable' }}
-  RUSTFLAGS: -Dwarnings
-  CARGO_TERM_COLOR: always
+    RUST_TOOLCHAIN: ${{ vars.RUST_TOOLCHAIN || 'stable' }}
+    RUSTFLAGS: -Dwarnings
+    CARGO_TERM_COLOR: always
+
+permissions: {}
 
 jobs:
-  deny:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-deny-check.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
-    with:
-      arguments: --all-features --locked --exclude-dev
+    deny:
+        name: "Check for CVEs and other issues with cargo-deny"
+        uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-deny-check.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
+        with:
+            arguments: --all-features --locked --exclude-dev

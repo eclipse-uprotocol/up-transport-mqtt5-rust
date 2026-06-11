@@ -17,37 +17,43 @@
 name: Nightly
 
 on:
-  schedule:
-    - cron: '0 3 * * *'
-  workflow_dispatch:
+    schedule:
+        - cron: "0 3 * * *"
+    workflow_dispatch:
 
 concurrency:
-  group: ${{ github.ref }}-${{ github.workflow }}
-  cancel-in-progress: true
+    group: ${{ github.ref }}-${{ github.workflow }}
+    cancel-in-progress: true
+
+permissions: {}
 
 jobs:
-  check-msrv:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-verify-msrv.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
+    check-msrv:
+        uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-verify-msrv.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
 
-  check-latest-deps:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-verify-latest-deps.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
+    check-latest-deps:
+        uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-verify-latest-deps.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
 
-  deny:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-deny-check.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
-    with:
-      arguments: --all-features --locked --exclude-dev
+    deny:
+        uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-deny-check.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
+        with:
+            arguments: --all-features --locked --exclude-dev
 
-  test-all-features:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-test-featurematrix.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
+    test-all-features:
+        uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-test-featurematrix.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
 
-  x-build:
-    # The jury is still out on whether this actually adds any value, besides simply being possible...
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-x-build.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
+    x-build:
+        # The jury is still out on whether this actually adds any value, besides simply being possible...
+        uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-x-build.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
 
-  coverage:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-coverage.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
+    coverage:
+        permissions:
+            contents: write # required for uploading coverage results as workflow artifacts
+        uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-coverage.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
 
-  current-spec-compliance:
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/requirements-tracing.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
-    with:
-      env-file-suffix: "oft-current"
+    current-spec-compliance:
+        permissions:
+            contents: write # required for uploading tracing results as workflow artifacts
+        uses: eclipse-uprotocol/ci-cd/.github/workflows/requirements-tracing.yaml@fcaf488b5d152c290a3a8dca2463a5c1dec65acd
+        with:
+            env-file-suffix: "oft-current"
