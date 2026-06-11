@@ -50,7 +50,7 @@ protobuf = { version = "3.7.2" }
 # https://rustsec.org/advisories/RUSTSEC-2026-0097
 rand = { version = "0.9.4" }
 slab = { version = "0.4.11" }
-tokio = { version = "1.45.1", default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1.52.3", default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
 up-rust = { version = "0.9", default-features = false }
 
 [build-dependencies]
@@ -69,7 +69,7 @@ testcontainers = { version = "0.27.2", default-features = false }
 rustls-webpki = { version = "0.103.13" }
 # https://rustsec.org/advisories/RUSTSEC-2026-0009
 time = { version = "0.3.47" }
-tokio = { version = "1.45.1", default-features = false, features = [
+tokio = { version = "1.52.3", default-features = false, features = [
     "macros",
     "rt",
     "signal",
