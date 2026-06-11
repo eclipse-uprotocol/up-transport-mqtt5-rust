@@ -2795,7 +2795,7 @@ dependencies = [
  "mockall 0.14.0",
  "paho-mqtt",
  "protobuf",
- "rand 0.9.4",
+ "rand 0.10.1",
  "rustls-webpki",
  "serial_test",
  "slab",
