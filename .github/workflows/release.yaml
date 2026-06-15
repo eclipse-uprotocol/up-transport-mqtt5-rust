@@ -40,7 +40,7 @@ jobs:
     # because we do not want the job to fail if not all requirements
     # are covered (yet)
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           submodules: "recursive"
       - name: "Determine OpenFastTrace file patterns from .env file"
@@ -76,7 +76,7 @@ jobs:
       - licenses
     permissions: write-all
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           submodules: "recursive"
 
@@ -200,7 +200,7 @@ jobs:
     env: 
       CRATES_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           submodules: "recursive"
 
