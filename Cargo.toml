@@ -48,7 +48,7 @@ log = { version = "0.4" }
 paho-mqtt = { version = "0.14.0", features = ["vendored-ssl"] }
 protobuf = { version = "3.7.2" }
 # https://rustsec.org/advisories/RUSTSEC-2026-0097
-rand = { version = "0.9.4" }
+rand = { version = "0.10.1" }
 slab = { version = "0.4.11" }
 tokio = { version = "1.45.1", default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
 up-rust = { version = "0.9", default-features = false }
