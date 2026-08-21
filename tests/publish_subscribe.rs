@@ -13,8 +13,8 @@
 
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use log::debug;
 use serial_test::serial;
+use tracing::debug;
 use up_rust::{MockUListener, UCode, UMessageBuilder, UTransport, UUri};
 
 mod common;
@@ -40,7 +40,7 @@ persistence_location /mosquitto/data/
 #[cfg_attr(not(docker_available), ignore)]
 // This test requires Docker to run the Mosquitto MQTT broker.
 async fn test_publish_and_subscribe_succeeds_after_reconnect(mosquitto_config: Option<&str>) {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // fixture
     let mosquitto =
@@ -160,7 +160,7 @@ async fn test_publish_and_subscribe_succeeds_after_reconnect(mosquitto_config: O
 #[cfg_attr(not(docker_available), ignore)]
 // This test requires Docker to run the Mosquitto MQTT broker.
 async fn test_connect_fails_for_wrong_credentials() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // fixture
     let mosquitto = common::start_mosquitto(None, Some(PASSWD_FILE), None, None).await;
@@ -194,7 +194,7 @@ async fn test_connect_fails_for_wrong_credentials() {
 #[cfg_attr(not(docker_available), ignore)]
 // This test requires Docker to run the Mosquitto MQTT broker.
 async fn test_publish_fails_if_unauthorized() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // fixture
     let acl_file = r#"

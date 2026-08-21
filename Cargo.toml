@@ -45,13 +45,17 @@ clap = { version = "4.6.6", optional = true, default-features = false, features 
     "suggestions",
 ] }
 futures = { version = "0.3.34" }
-log = { version = "0.4.33" }
 paho-mqtt = { version = "0.14.0", features = ["vendored-ssl"] }
 protobuf = { version = "3.7.2" }
 # https://rustsec.org/advisories/RUSTSEC-2026-0097
 rand = { version = "0.9.5" }
 slab = { version = "0.4.12" }
-tokio = { version = "1.53.1", default-features = false, features = ["rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1.53.1", default-features = false, features = [
+    "rt",
+    "rt-multi-thread",
+    "sync",
+] }
+tracing = { version = "0.1", default-features = false }
 up-rust = { version = "0.9", default-features = false }
 
 [build-dependencies]
@@ -60,7 +64,6 @@ testcontainers = { version = "0.28.0", default-features = false, features = ["bl
 [dev-dependencies]
 # https://rustsec.org/advisories/RUSTSEC-2026-0145
 astral-tokio-tar = { version = "0.6.4" }
-env_logger = { version = "0.11.11" }
 mockall = { version = "0.15.0" }
 serial_test = { version = "3.5.0" }
 tempfile = { version = "3.27.0" }
@@ -76,6 +79,8 @@ tokio = { version = "1.53.1", default-features = false, features = [
     "signal",
     "sync",
 ] }
+tracing = { version = "0.1", default-features = false, features = ["log", "std"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 up-rust = { version = "0.9", default-features = false, features = ["test-util"] }
 
 [[example]]
