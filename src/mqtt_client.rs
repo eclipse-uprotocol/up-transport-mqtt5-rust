@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use backon::Retryable;
 #[cfg(feature = "cli")]
 use clap::Args;
-use log::{debug, error, trace};
+use tracing::{debug, error, trace};
 use up_rust::{UCode, UStatus};
 
 use crate::{listener_registry::SubscribedTopicProvider, SubscriptionIdentifier};

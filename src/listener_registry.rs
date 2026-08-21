@@ -16,8 +16,8 @@ use std::{
     sync::Arc,
 };
 
-use log::debug;
 use slab::Slab;
+use tracing::debug;
 use up_rust::{ComparableListener, UCode, UStatus};
 
 pub(crate) type SubscriptionIdentifier = u16;

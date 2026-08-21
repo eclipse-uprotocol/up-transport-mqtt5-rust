@@ -20,7 +20,7 @@ use std::{
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use clap::Parser;
-use log::{error, info};
+use tracing::{error, info};
 use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions};
 
@@ -60,7 +60,7 @@ struct Command {
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
-    env_logger::init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let command = Command::parse();
     let authority = command.topic_filter.authority_name.clone();

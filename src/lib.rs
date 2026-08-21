@@ -52,11 +52,11 @@ use bytes::Bytes;
 #[cfg(feature = "cli")]
 use clap::{Args, ValueEnum};
 use listener_registry::{RegisteredListeners, SubscriptionIdentifier};
-use log::{debug, trace};
 use mqtt_client::MqttClientOperations;
 pub use mqtt_client::{MqttClientOptions, SslOptions};
 use paho_mqtt::{self as mqtt, Message, QOS_1};
 use tokio::{sync::RwLock, task::JoinHandle};
+use tracing::{debug, trace};
 #[allow(unused_imports)]
 use up_rust::UTransport;
 use up_rust::{ComparableListener, UAttributes, UCode, UMessage, UStatus, UUri, UUriError};
@@ -247,7 +247,10 @@ async fn process_incoming_message(
             },
             Err(e) => {
                 // [impl->dsn~utransport-registerlistener-discard-invalid-messages~1]
-                debug!("Failed to map MQTT PUBLISH packet to uProtocol message: {e}");
+                debug!(
+                    topic = mqtt_message.topic(),
+                    error_code = ?e.get_code(),
+                    "Failed to map MQTT PUBLISH packet to uProtocol message: {e}");
                 return;
             }
         };
@@ -490,7 +493,7 @@ impl Mqtt5Transport {
             while let Ok(msg_opt) = message_stream.recv().await {
                 let Some(msg) = msg_opt else {
                     // None means that the connection is dropped.
-                    debug!("Lost connection to MQTT broker");
+                    debug!("Lost connection to MQTT broker, trying to reconnect...");
                     cloned_client_operations.reconnect().await;
                     continue;
                 };
