@@ -93,6 +93,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "astral-tokio-tar"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f2e989b33246fe9240d39accf4dd9a01e0b6c1f3ce9dd095e0a47fa02505523"
+dependencies = [
+ "futures-core",
+ "libc",
+ "portable-atomic",
+ "rustc-hash",
+ "rustix 1.1.4",
+ "tokio",
+ "tokio-stream",
+ "xattr",
+ "zerocopy",
+]
+
+[[package]]
 name = "async-channel"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2444,7 +2461,7 @@ version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e2bbe381afaaa58ea610c5fc3ffb2184063a32b3e358a179f0b4865dd59934a"
 dependencies = [
- "astral-tokio-tar",
+ "astral-tokio-tar 0.6.4",
  "async-trait",
  "bollard",
  "bytes",
@@ -2810,7 +2827,7 @@ dependencies = [
 name = "up-transport-mqtt5"
 version = "0.5.0-SNAPSHOT"
 dependencies = [
- "astral-tokio-tar",
+ "astral-tokio-tar 0.7.0",
  "async-channel",
  "async-trait",
  "backon",

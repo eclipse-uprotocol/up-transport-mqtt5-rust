@@ -63,7 +63,7 @@ testcontainers = { version = "0.28.0", default-features = false, features = ["bl
 
 [dev-dependencies]
 # https://rustsec.org/advisories/RUSTSEC-2026-0145
-astral-tokio-tar = { version = "0.6.4" }
+astral-tokio-tar = { version = "0.7.0" }
 mockall = { version = "0.15.0" }
 serial_test = { version = "3.5.0" }
 tempfile = { version = "3.27.0" }
