@@ -2,7 +2,7 @@
 
 This file is meant to provide an overview and explainer on what the up-rust workflow automation strategy is, and what the different workflow elements do.
 
-__A general note:__ All workflows will use the `stable` version of the Rust toolchain, unless the GitHub actions variable `RUST_TOOLCHAIN` is set to pin a specific Rust version (e.g. ```RUST_TOOLCHAIN=1.76.0```).
+**A general note:** All workflows will use the `stable` version of the Rust toolchain, unless the GitHub actions variable `RUST_TOOLCHAIN` is set to pin a specific Rust version (e.g. `RUST_TOOLCHAIN=1.76.0`).
 
 At this time, there are three events that will initiate a workflow run:
 
@@ -14,9 +14,35 @@ This is implemented in [`check.yaml`](check.yaml) and [`check-dependencies.yaml`
 
 ## Release publication
 
-We want exhaustive tests and all possible checks, as well as creation of license reports, collection of quality artifacts and publication to crates.io. This workflow pulls in other pieces like the build workflow. An actual release is triggered by pushing a tag that begins with 'v', else this workflow just generates and collects artifacts on workflow level. This will also publish to crates.io if the CRATES_TOKEN secret is set.
+We want exhaustive tests and all possible checks, as well as creation of license reports, collection of quality artifacts and publication to crates.io. This workflow pulls in other pieces like the build workflow. An actual release is triggered by pushing a tag that begins with `v`. The GitHub Release for that tag must exist before the workflow uploads its release artifacts. After the checks and artifact uploads succeed, the package is verified with a dry run and published automatically using crates.io Trusted Publishing.
 
 This is implemented in [`release.yaml`](release.yaml)
+
+### Trusted Publishing setup
+
+Configure a GitHub Trusted Publisher for `up-transport-mqtt5` in its
+[crates.io settings](https://crates.io/crates/up-transport-mqtt5/settings):
+
+| Field             | Value                     |
+| ----------------- | ------------------------- |
+| Repository owner  | `eclipse-uprotocol`       |
+| Repository name   | `up-transport-mqtt5-rust` |
+| Workflow filename | `release.yaml`            |
+| Environment       | Leave blank               |
+
+Only the publishing and authentication-test jobs can request an OIDC token.
+The official crates.io authentication action exchanges the GitHub identity for
+a short-lived publication token and revokes it at the end of the job. No
+long-lived crates.io secret or second-person deployment approval is required.
+
+After the workflow is merged, manually dispatch **Release** from `main` to test
+authentication. Manual dispatch runs only the authentication-test job: it does
+not run tests, upload release artifacts, or publish a crate. Dispatching from
+another branch skips all jobs.
+
+After the first successful OIDC publication, enable trusted-publishing-only for
+the crate. The organization-level `CRATES_IO_TOKEN` is still used by other
+repositories and should not be removed as part of this repository's migration.
 
 ## Nightly, out of everyone's way
 
