@@ -37,6 +37,6 @@ permissions:
 jobs:
   deny:
     name: "Check for CVEs and other issues with cargo-deny"
-    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-deny-check.yaml@ad3f99eac0675c714f08c473412dae14d9fecaa8 # main
+    uses: eclipse-uprotocol/ci-cd/.github/workflows/rust-deny-check.yaml@ad3f99eac0675c714f08c473412dae14d9fecaa8
     with:
       arguments: --all-features --locked --exclude-dev
